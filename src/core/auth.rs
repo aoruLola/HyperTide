@@ -1,10 +1,10 @@
 //! Authentication Manager
 //! Handles API key validation and permission checking
 
+use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 /// 权限级别
@@ -84,18 +84,23 @@ impl AuthManager {
             keys: Arc::new(DashMap::new()),
             dev_master_key: Some(master_key.clone()),
         };
-        
+
         // 注册开发 Master Key (拥有所有权限)
         let dev_api_key = ApiKey {
             key: master_key,
             owner_id: "dev-admin".to_string(),
-            permissions: vec![Permission::Lock, Permission::Upload, Permission::Download, Permission::Admin],
+            permissions: vec![
+                Permission::Lock,
+                Permission::Upload,
+                Permission::Download,
+                Permission::Admin,
+            ],
             created_at: Utc::now(),
             expires_at: None,
             revoked: false,
         };
         manager.keys.insert(dev_api_key.key.clone(), dev_api_key);
-        
+
         manager
     }
 
@@ -125,9 +130,7 @@ impl AuthManager {
         expires_in_days: Option<i64>,
     ) -> ApiKey {
         let key = format!("ht_{}", Uuid::new_v4().to_string().replace("-", ""));
-        let expires_at = expires_in_days.map(|days| {
-            Utc::now() + chrono::Duration::days(days)
-        });
+        let expires_at = expires_in_days.map(|days| Utc::now() + chrono::Duration::days(days));
 
         let api_key = ApiKey {
             key: key.clone(),
@@ -159,7 +162,10 @@ impl AuthManager {
 
     /// 检查是否为开发 Master Key
     pub fn is_dev_master_key(&self, key: &str) -> bool {
-        self.dev_master_key.as_ref().map(|k| k == key).unwrap_or(false)
+        self.dev_master_key
+            .as_ref()
+            .map(|k| k == key)
+            .unwrap_or(false)
     }
 }
 
@@ -176,10 +182,10 @@ mod tests {
     #[test]
     fn test_dev_master_key() {
         let manager = AuthManager::with_dev_key("test-master-key");
-        
+
         // Master Key 应该有效
         assert!(manager.validate_key("test-master-key").is_some());
-        
+
         // Master Key 应该拥有所有权限
         assert!(manager.has_permission("test-master-key", Permission::Admin));
         assert!(manager.has_permission("test-master-key", Permission::Lock));
@@ -189,12 +195,13 @@ mod tests {
     #[test]
     fn test_generate_and_validate_key() {
         let manager = AuthManager::new();
-        
-        let api_key = manager.generate_key("alice", vec![Permission::Lock, Permission::Download], None);
-        
+
+        let api_key =
+            manager.generate_key("alice", vec![Permission::Lock, Permission::Download], None);
+
         // 新生成的 Key 应该有效
         assert!(manager.validate_key(&api_key.key).is_some());
-        
+
         // 权限检查
         assert!(manager.has_permission(&api_key.key, Permission::Lock));
         assert!(manager.has_permission(&api_key.key, Permission::Download));
@@ -204,13 +211,13 @@ mod tests {
     #[test]
     fn test_revoke_key() {
         let manager = AuthManager::new();
-        
+
         let api_key = manager.generate_key("bob", vec![Permission::Upload], None);
         assert!(manager.validate_key(&api_key.key).is_some());
-        
+
         // 撤销 Key
         assert!(manager.revoke_key(&api_key.key));
-        
+
         // 撤销后应该无效
         assert!(manager.validate_key(&api_key.key).is_none());
     }
@@ -218,7 +225,7 @@ mod tests {
     #[test]
     fn test_invalid_key() {
         let manager = AuthManager::new();
-        
+
         // 不存在的 Key 应该返回 None
         assert!(manager.validate_key("invalid-key").is_none());
         assert!(!manager.has_permission("invalid-key", Permission::Lock));

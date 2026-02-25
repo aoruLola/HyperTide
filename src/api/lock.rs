@@ -1,14 +1,10 @@
 //! Lock API Handlers
 //! HTTP endpoints for file locking operations
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
-use serde::Deserialize;
-use crate::core::lock::{FileLock, LockManager};
 use crate::api::common::ApiResponse;
+use crate::core::lock::{FileLock, LockManager};
+use axum::{extract::State, http::StatusCode, Json};
+use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct LockRequest {
@@ -61,15 +57,16 @@ pub async fn force_unlock_file(
     if removed {
         (StatusCode::OK, Json(ApiResponse::ok(true)))
     } else {
-        (StatusCode::NOT_FOUND, Json(ApiResponse::err("File was not locked")))
+        (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::err("File was not locked")),
+        )
     }
 }
 
 /// GET /api/locks
 /// List all current locks
-pub async fn list_locks(
-    State(manager): State<LockManager>,
-) -> Json<ApiResponse<Vec<FileLock>>> {
+pub async fn list_locks(State(manager): State<LockManager>) -> Json<ApiResponse<Vec<FileLock>>> {
     let locks = manager.list_locks();
     Json(ApiResponse::ok(locks))
 }

@@ -1,7 +1,7 @@
+use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileLock {
@@ -50,7 +50,10 @@ impl LockManager {
         // We need to check ownership before removing
         if let Some(existing) = self.locks.get(file_path) {
             if existing.owner_id != owner_id {
-                return Err(format!("Cannot unlock: File is locked by {}", existing.owner_id));
+                return Err(format!(
+                    "Cannot unlock: File is locked by {}",
+                    existing.owner_id
+                ));
             }
         } else {
             return Err("File is not locked".to_string());
@@ -68,5 +71,10 @@ impl LockManager {
     /// List all locks (for administrative view or debugging)
     pub fn list_locks(&self) -> Vec<FileLock> {
         self.locks.iter().map(|kv| kv.value().clone()).collect()
+    }
+
+    /// Query lock by path.
+    pub fn get_lock(&self, file_path: &str) -> Option<FileLock> {
+        self.locks.get(file_path).map(|entry| entry.clone())
     }
 }

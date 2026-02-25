@@ -8,19 +8,23 @@ mod core;
 
 use axum::{
     extract::FromRef,
-    routing::{get, post, delete},
+    routing::{delete, get, post},
     Router,
 };
 use std::net::SocketAddr;
-use tower_http::cors::{CorsLayer, Any};
+use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::api::lock::{lock_file, unlock_file, force_unlock_file, list_locks};
-use crate::api::storage::{upload_file, download_file, check_exists, calculate_hash};
-use crate::api::auth::{verify_key, generate_key, revoke_key, list_keys};
+use crate::api::auth::{generate_key, list_keys, revoke_key, verify_key};
+use crate::api::lock::{force_unlock_file, list_locks, lock_file, unlock_file};
+use crate::api::storage::{calculate_hash, check_exists, download_file, upload_file};
+use crate::api::versioning::{
+    create_branch, list_branches, list_history, rollback, submit_changeset, sync_snapshot,
+};
+use crate::core::auth::AuthManager;
 use crate::core::lock::LockManager;
 use crate::core::storage::StorageManager;
-use crate::core::auth::AuthManager;
+use crate::core::versioning::VersionManager;
 
 const VERSION: &str = "Surface 26.0.1 Preview";
 
@@ -29,9 +33,9 @@ const DEV_MASTER_KEY: &str = "dev-master-key";
 
 fn print_banner() {
     // ANSI color codes - Red to Purple gradient
-    const RED: &str = "\x1b[91m";      // Bright red
-    const MAGENTA: &str = "\x1b[95m";  // Bright magenta/purple
-    const PURPLE: &str = "\x1b[35m";   // Purple
+    const RED: &str = "\x1b[91m"; // Bright red
+    const MAGENTA: &str = "\x1b[95m"; // Bright magenta/purple
+    const PURPLE: &str = "\x1b[35m"; // Purple
     const RESET: &str = "\x1b[0m";
     const DIM: &str = "\x1b[2m";
     const GREEN: &str = "\x1b[92m";
@@ -43,10 +47,18 @@ fn print_banner() {
     println!();
     println!("{RED}  ██╗  ██╗██╗   ██╗██████╗ ███████╗██████╗ ████████╗██╗██████╗ ███████╗{RESET}");
     println!("{RED}  ██║  ██║╚██╗ ██╔╝██╔══██╗██╔════╝██╔══██╗╚══██╔══╝██║██╔══██╗██╔════╝{RESET}");
-    println!("{MAGENTA}  ███████║ ╚████╔╝ ██████╔╝█████╗  ██████╔╝   ██║   ██║██║  ██║█████╗  {RESET}");
-    println!("{MAGENTA}  ██╔══██║  ╚██╔╝  ██╔═══╝ ██╔══╝  ██╔══██╗   ██║   ██║██║  ██║██╔══╝  {RESET}");
-    println!("{PURPLE}  ██║  ██║   ██║   ██║     ███████╗██║  ██║   ██║   ██║██████╔╝███████╗{RESET}");
-    println!("{PURPLE}  ╚═╝  ╚═╝   ╚═╝   ╚═╝     ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚═╝╚═════╝ ╚══════╝{RESET}");
+    println!(
+        "{MAGENTA}  ███████║ ╚████╔╝ ██████╔╝█████╗  ██████╔╝   ██║   ██║██║  ██║█████╗  {RESET}"
+    );
+    println!(
+        "{MAGENTA}  ██╔══██║  ╚██╔╝  ██╔═══╝ ██╔══╝  ██╔══██╗   ██║   ██║██║  ██║██╔══╝  {RESET}"
+    );
+    println!(
+        "{PURPLE}  ██║  ██║   ██║   ██║     ███████╗██║  ██║   ██║   ██║██████╔╝███████╗{RESET}"
+    );
+    println!(
+        "{PURPLE}  ╚═╝  ╚═╝   ╚═╝   ╚═╝     ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚═╝╚═════╝ ╚══════╝{RESET}"
+    );
     println!();
     println!("  {DIM}CLI Surface 26.0.1 Preview{RESET}");
     println!();
@@ -62,6 +74,7 @@ pub struct AppState {
     pub lock_manager: LockManager,
     pub storage_manager: StorageManager,
     pub auth_manager: AuthManager,
+    pub version_manager: VersionManager,
 }
 
 // Allow extracting LockManager from AppState
@@ -82,6 +95,13 @@ impl FromRef<AppState> for StorageManager {
 impl FromRef<AppState> for AuthManager {
     fn from_ref(state: &AppState) -> Self {
         state.auth_manager.clone()
+    }
+}
+
+// Allow extracting VersionManager from AppState
+impl FromRef<AppState> for VersionManager {
+    fn from_ref(state: &AppState) -> Self {
+        state.version_manager.clone()
     }
 }
 
@@ -112,11 +132,12 @@ async fn main() {
 
     // Initialize shared state
     let lock_manager = LockManager::new();
-    
+
     let state = AppState {
         lock_manager,
         storage_manager,
         auth_manager,
+        version_manager: VersionManager::new(),
     };
 
     // CORS configuration (allow all for development)
@@ -145,6 +166,13 @@ async fn main() {
         .route("/api/auth/generate", post(generate_key))
         .route("/api/auth/revoke", delete(revoke_key))
         .route("/api/auth/keys", get(list_keys))
+        // V1 Workflow API
+        .route("/v1/branches", post(create_branch))
+        .route("/v1/branches/{repo_id}", get(list_branches))
+        .route("/v1/changesets", post(submit_changeset))
+        .route("/v1/history/{repo_id}", get(list_history))
+        .route("/v1/rollback", post(rollback))
+        .route("/v1/sync/{repo_id}", get(sync_snapshot))
         // Middleware
         .layer(cors)
         // Shared State (unified)
@@ -153,7 +181,7 @@ async fn main() {
     // Start server
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     tracing::info!("🌊 {} - Listening on http://{}", VERSION, addr);
-    
+
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
@@ -167,4 +195,3 @@ async fn root() -> &'static str {
 async fn health() -> &'static str {
     "OK"
 }
-

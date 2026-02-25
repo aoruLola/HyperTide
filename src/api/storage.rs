@@ -10,19 +10,14 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::core::storage::StorageManager;
 use crate::api::common::ApiResponse;
+use crate::core::storage::StorageManager;
 
 #[derive(Debug, Serialize)]
 pub struct UploadResponse {
     pub hash: String,
     pub size_bytes: u64,
     pub original_path: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct HashQuery {
-    pub hash: String,
 }
 
 /// POST /api/upload
@@ -49,7 +44,7 @@ pub async fn upload_file(
     };
 
     let filename = field.file_name().unwrap_or("unknown").to_string();
-    
+
     let data = match field.bytes().await {
         Ok(d) => d,
         Err(e) => {
@@ -69,10 +64,7 @@ pub async fn upload_file(
                 original_path: stored.original_path,
             })),
         ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::err(e)),
-        ),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::err(e))),
     }
 }
 
@@ -83,17 +75,16 @@ pub async fn download_file(
     Path(hash): Path<String>,
 ) -> Response {
     match manager.retrieve(&hash).await {
-        Ok(data) => {
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "application/octet-stream")
-                .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"", hash))
-                .body(Body::from(data))
-                .unwrap()
-        }
-        Err(e) => {
-            (StatusCode::NOT_FOUND, e).into_response()
-        }
+        Ok(data) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .header(
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{}\"", hash),
+            )
+            .body(Body::from(data))
+            .unwrap(),
+        Err(e) => (StatusCode::NOT_FOUND, e).into_response(),
     }
 }
 
@@ -119,11 +110,9 @@ pub struct HashResponse {
     pub hash: String,
 }
 
-pub async fn calculate_hash(
-    Json(payload): Json<HashRequest>,
-) -> Json<ApiResponse<HashResponse>> {
+pub async fn calculate_hash(Json(payload): Json<HashRequest>) -> Json<ApiResponse<HashResponse>> {
     use base64::Engine;
-    
+
     match base64::engine::general_purpose::STANDARD.decode(&payload.data) {
         Ok(data) => {
             let hash = StorageManager::calculate_hash(&data);
@@ -132,4 +121,3 @@ pub async fn calculate_hash(
         Err(e) => Json(ApiResponse::err(format!("Invalid base64: {}", e))),
     }
 }
-

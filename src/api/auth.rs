@@ -1,15 +1,11 @@
 //! Authentication API Handlers
 //! HTTP endpoints for API key management and authentication
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
+use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
-use crate::core::auth::{AuthManager, Permission, ApiKey};
 use crate::api::common::ApiResponse;
+use crate::core::auth::{AuthManager, Permission};
 
 // ==================== Request/Response DTOs ====================
 
@@ -79,7 +75,11 @@ pub async fn verify_key(
         Some(api_key) => Json(ApiResponse::ok(VerifyResponse {
             valid: true,
             owner_id: Some(api_key.owner_id),
-            permissions: api_key.permissions.iter().map(permission_to_string).collect(),
+            permissions: api_key
+                .permissions
+                .iter()
+                .map(permission_to_string)
+                .collect(),
         })),
         None => Json(ApiResponse::ok(VerifyResponse {
             valid: false,
@@ -131,7 +131,11 @@ pub async fn generate_key(
         Json(ApiResponse::ok(GenerateKeyResponse {
             key: api_key.key,
             owner_id: api_key.owner_id,
-            permissions: api_key.permissions.iter().map(permission_to_string).collect(),
+            permissions: api_key
+                .permissions
+                .iter()
+                .map(permission_to_string)
+                .collect(),
             expires_at: api_key.expires_at.map(|dt| dt.to_rfc3339()),
         })),
     )
@@ -170,7 +174,10 @@ pub async fn revoke_key(
     if revoked {
         (StatusCode::OK, Json(ApiResponse::ok(true)))
     } else {
-        (StatusCode::NOT_FOUND, Json(ApiResponse::err("Key not found")))
+        (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::err("Key not found")),
+        )
     }
 }
 
