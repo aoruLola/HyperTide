@@ -17,7 +17,7 @@
 | M8-009 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m8-production-baseline | done | codex | P0 | 2026-03-13 | M8-006 |
 | M8-010 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m8-production-baseline | done | codex | P1 | 2026-03-14 | M8-005,M8-008 |
 | M8-011 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m8-production-baseline | in_progress | codex | P1 | 2026-03-15 | docker daemon unavailable for runtime smoke |
-| M8-012 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#validation-matrix | todo | codex | P1 | 2026-03-16 | M8-001~011 |
+| M8-012 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#validation-matrix | in_progress | codex | P1 | 2026-03-16 | waiting for runtime smoke with docker daemon |
 | M9-001 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m9-git--p4-core-mechanics | todo | codex | P0 | 2026-03-20 | M8 close |
 | M9-002 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m9-git--p4-core-mechanics | todo | codex | P0 | 2026-03-20 | M9-001 |
 | M9-003 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m9-git--p4-core-mechanics | todo | codex | P0 | 2026-03-21 | M9-001 |
