@@ -128,6 +128,21 @@ pub struct HistoryPage {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ChangesetGate {
+    pub repo_id: String,
+    pub changeset_id: String,
+    pub branch: String,
+    pub status: ChangesetStatus,
+    pub required_state: &'static str,
+    pub can_promote: bool,
+    pub blocking_reason: Option<String>,
+    pub base_changeset_id: Option<String>,
+    pub branch_head_changeset_id: Option<String>,
+    pub staging_ref: Option<String>,
+    pub visible_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SyncSnapshot {
     pub repo_id: String,
     pub branch: String,
@@ -480,6 +495,68 @@ impl VersionManager {
             tracing::error!("failed to persist promote state for {repo_id}: {error}");
         }
         Ok(record)
+    }
+
+    pub fn changeset_gate(
+        &self,
+        repo_id: &str,
+        changeset_id: &str,
+    ) -> Result<ChangesetGate, VersioningError> {
+        let repos = self.repos.read().expect("versioning lock poisoned");
+        let repo = repos
+            .get(repo_id)
+            .ok_or_else(|| VersioningError::RepoNotFound {
+                repo_id: repo_id.to_string(),
+            })?;
+        let record = repo
+            .changesets
+            .get(changeset_id)
+            .ok_or_else(|| VersioningError::ChangesetNotFound {
+                repo_id: repo_id.to_string(),
+                changeset_id: changeset_id.to_string(),
+            })?;
+        let branch_state =
+            repo.branches
+                .get(&record.branch)
+                .ok_or_else(|| VersioningError::BranchNotFound {
+                    repo_id: repo_id.to_string(),
+                    branch: record.branch.clone(),
+                })?;
+        let current_head = branch_state.record.head_changeset_id.clone();
+        let base = record.base_changeset_id.clone();
+
+        let (can_promote, blocking_reason) = if record.status != ChangesetStatus::Approved {
+            (
+                false,
+                Some(format!(
+                    "changeset status is {}, expected approved",
+                    record.status.as_str()
+                )),
+            )
+        } else if current_head != base {
+            (
+                false,
+                Some(format!(
+                    "branch head mismatch: current={current_head:?}, base={base:?}"
+                )),
+            )
+        } else {
+            (true, None)
+        };
+
+        Ok(ChangesetGate {
+            repo_id: repo_id.to_string(),
+            changeset_id: changeset_id.to_string(),
+            branch: record.branch.clone(),
+            status: record.status,
+            required_state: "approved",
+            can_promote,
+            blocking_reason,
+            base_changeset_id: base,
+            branch_head_changeset_id: current_head,
+            staging_ref: record.staging_ref.clone(),
+            visible_ref: record.visible_ref.clone(),
+        })
     }
 
     pub fn history(
@@ -1168,6 +1245,58 @@ mod tests {
             .expect("promote approved");
         assert_eq!(promoted.visible_ref.as_deref(), Some("refs/heads/main"));
         assert!(promoted.staging_ref.is_some());
+    }
+
+    #[tokio::test]
+    async fn changeset_gate_requires_approved_before_promote() {
+        let manager = VersionManager::new();
+
+        let base = manager
+            .submit_changeset(SubmitChangesetInput {
+                repo_id: "repo-gate-2".to_string(),
+                branch: "main".to_string(),
+                base_changeset_id: Some(ROOT_BASE_CHANGESET_ID.to_string()),
+                kind: ChangesetKind::Normal,
+                rollback_of: None,
+                author: "alice".to_string(),
+                message: "base".to_string(),
+                visibility: ChangesetVisibility::Visible,
+                assets: vec![],
+            })
+            .await
+            .expect("base changeset");
+
+        let draft = manager
+            .submit_changeset(SubmitChangesetInput {
+                repo_id: "repo-gate-2".to_string(),
+                branch: "main".to_string(),
+                base_changeset_id: Some(base.changeset_id.clone()),
+                kind: ChangesetKind::Normal,
+                rollback_of: None,
+                author: "alice".to_string(),
+                message: "draft".to_string(),
+                visibility: ChangesetVisibility::Draft,
+                assets: vec![],
+            })
+            .await
+            .expect("draft changeset");
+
+        let gate_before = manager
+            .changeset_gate("repo-gate-2", &draft.changeset_id)
+            .expect("gate for draft");
+        assert!(!gate_before.can_promote);
+        assert_eq!(gate_before.required_state, "approved");
+
+        manager
+            .approve_changeset("repo-gate-2", &draft.changeset_id, "reviewer")
+            .await
+            .expect("approve draft");
+
+        let gate_after = manager
+            .changeset_gate("repo-gate-2", &draft.changeset_id)
+            .expect("gate for approved");
+        assert!(gate_after.can_promote);
+        assert_eq!(gate_after.required_state, "approved");
     }
 
     #[tokio::test]

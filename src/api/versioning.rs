@@ -10,8 +10,9 @@ use crate::api::common::ApiResponse;
 use crate::api::middleware::authz;
 use crate::core::auth::{AuthIdentity, Permission};
 use crate::core::versioning::{
-    AssetDelta, BranchRecord, ChangesetKind, ChangesetRecord, ChangesetVisibility, HistoryPage,
-    SnapshotEntry, SubmitChangesetInput, SyncSnapshot, VersioningError, ROOT_BASE_CHANGESET_ID,
+    AssetDelta, BranchRecord, ChangesetGate, ChangesetKind, ChangesetRecord, ChangesetVisibility,
+    HistoryPage, SnapshotEntry, SubmitChangesetInput, SyncSnapshot, VersioningError,
+    ROOT_BASE_CHANGESET_ID,
 };
 use crate::AppState;
 
@@ -644,6 +645,26 @@ pub async fn promote_changeset(
             }
             (StatusCode::OK, Json(ApiResponse::ok(changeset)))
         }
+        Err(error) => {
+            let (status, message) = map_versioning_error(error);
+            (status, Json(ApiResponse::err(message)))
+        }
+    }
+}
+
+/// GET /v2/changesets/{changeset_id}/gate?repo_id=...
+pub async fn changeset_gate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(changeset_id): Path<String>,
+    Query(query): Query<ChangesetActionQuery>,
+) -> (StatusCode, Json<ApiResponse<ChangesetGate>>) {
+    if let Err((status, message)) = require_key(&state, &headers, Permission::Download).await {
+        return (status, Json(ApiResponse::err(message)));
+    }
+
+    match state.version_manager.changeset_gate(&query.repo_id, &changeset_id) {
+        Ok(gate) => (StatusCode::OK, Json(ApiResponse::ok(gate))),
         Err(error) => {
             let (status, message) = map_versioning_error(error);
             (status, Json(ApiResponse::err(message)))

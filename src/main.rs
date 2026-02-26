@@ -27,8 +27,8 @@ use crate::api::trust::{
     verify_audit_chain, verify_replay, witness_summary,
 };
 use crate::api::versioning::{
-    approve_changeset, create_branch, list_branches, list_history, promote_changeset, rollback,
-    submit_changeset, sync_snapshot,
+    approve_changeset, changeset_gate, create_branch, list_branches, list_history,
+    promote_changeset, rollback, submit_changeset, sync_snapshot,
 };
 use crate::core::auth::AuthManager;
 use crate::core::audit_chain::AuditChain;
@@ -134,6 +134,7 @@ fn build_app(state: AppState) -> Router {
             "/v2/changesets/:changeset_id/promote",
             post(promote_changeset),
         )
+        .route("/v2/changesets/:changeset_id/gate", get(changeset_gate))
         .route("/v2/history/:repo_id", get(list_history))
         .route("/v2/rollback", post(rollback))
         .route("/v2/sync/:repo_id", get(sync_snapshot))
@@ -393,5 +394,32 @@ mod tests {
 
         let response = app.oneshot(request).await.expect("response");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn changeset_gate_rejects_missing_api_key() {
+        let app = build_app(test_state());
+
+        let request = Request::builder()
+            .uri("/v2/changesets/test-id/gate?repo_id=repo-a")
+            .body(Body::empty())
+            .expect("request");
+
+        let response = app.oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn changeset_gate_returns_not_found_for_unknown_repo() {
+        let app = build_app(test_state());
+
+        let request = Request::builder()
+            .uri("/v2/changesets/test-id/gate?repo_id=repo-a")
+            .header("X-API-Key", DEV_MASTER_KEY)
+            .body(Body::empty())
+            .expect("request");
+
+        let response = app.oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

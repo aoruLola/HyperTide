@@ -234,6 +234,23 @@ paths:
         - BearerAuth: []
       responses:
         '200': { description: Promoted }
+  /v2/changesets/{changeset_id}/gate:
+    get:
+      summary: Query approve gate status for promote
+      parameters:
+        - in: path
+          name: changeset_id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: repo_id
+          required: true
+          schema: { type: string }
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Gate status }
   /v2/history/{repo_id}:
     get:
       summary: List history
