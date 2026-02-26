@@ -155,6 +155,14 @@ paths:
         - BearerAuth: []
       responses:
         '200': { description: Uploaded or already exists }
+  /v2/manifests:
+    post:
+      summary: Create canonical manifest and persist metadata
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '201': { description: Created }
   /v2/branches:
     post:
       summary: Create branch
