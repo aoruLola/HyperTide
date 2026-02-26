@@ -319,6 +319,14 @@ paths:
         - BearerAuth: []
       responses:
         '200': { description: Verify result }
+  /v2/trust/replay/verify:
+    post:
+      summary: Verify event replay consistency against current state
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Replay verification result }
 components:
   securitySchemes:
     ApiKeyAuth:

@@ -10,6 +10,7 @@ use crate::core::{
     audit_chain::AuditVerifyResult,
     auth::Permission,
     checkpoint::CheckpointRecord,
+    replay::ReplayVerification,
     witness::{WitnessReceipt, WitnessSummary},
 };
 use crate::AppState;
@@ -154,6 +155,30 @@ pub async fn verify_audit_chain(
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiResponse::err(format!("failed to verify audit chain: {error}"))),
+        ),
+    }
+}
+
+pub async fn verify_replay(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<ApiResponse<ReplayVerification>>) {
+    if let Err((status, message)) = require_permission(&state, &headers, Permission::Admin).await {
+        return (status, Json(ApiResponse::err(message)));
+    }
+
+    let Some(replay_service) = &state.replay_service else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse::err("replay service unavailable")),
+        );
+    };
+
+    match replay_service.verify().await {
+        Ok(result) => (StatusCode::OK, Json(ApiResponse::ok(result))),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::err(format!("failed to verify replay: {error}"))),
         ),
     }
 }
