@@ -12,10 +12,10 @@
 | M8-004 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m8-production-baseline | done | codex | P0 | 2026-03-07 | M8-001~003 |
 | M8-005 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m8-production-baseline | done | codex | P0 | 2026-03-09 | M8-004 |
 | M8-006 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m8-production-baseline | done | codex | P0 | 2026-03-10 | M8-005 |
-| M8-007 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m8-production-baseline | in_progress | codex | P0 | 2026-03-12 | M8-001~003 |
+| M8-007 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m8-production-baseline | done | codex | P0 | 2026-03-12 | M8-001~003 |
 | M8-008 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m8-production-baseline | done | codex | P0 | 2026-03-12 | M8-006 |
 | M8-009 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m8-production-baseline | done | codex | P0 | 2026-03-13 | M8-006 |
-| M8-010 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m8-production-baseline | todo | codex | P1 | 2026-03-14 | M8-005,M8-008 |
+| M8-010 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m8-production-baseline | done | codex | P1 | 2026-03-14 | M8-005,M8-008 |
 | M8-011 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m8-production-baseline | todo | codex | P1 | 2026-03-15 | M8-001~009 |
 | M8-012 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#validation-matrix | todo | codex | P1 | 2026-03-16 | M8-001~011 |
 | M9-001 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m9-git--p4-core-mechanics | todo | codex | P0 | 2026-03-20 | M8 close |

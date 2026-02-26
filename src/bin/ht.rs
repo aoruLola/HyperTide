@@ -1,9 +1,10 @@
 ﻿use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest::{RequestBuilder, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 const ROOT_BASE_CHANGESET_ID: &str = "ROOT";
@@ -32,6 +33,8 @@ struct LoginArgs {
     server: String,
     #[arg(long)]
     token: String,
+    #[arg(long, default_value_t = false)]
+    api_key_direct: bool,
     #[arg(long)]
     repo: Option<String>,
     #[arg(long, default_value = "main")]
@@ -132,9 +135,23 @@ struct SyncArgs {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CliProfile {
     server: String,
-    token: String,
+    #[serde(alias = "token")]
+    api_key: String,
+    #[serde(default)]
+    api_key_direct: bool,
+    #[serde(default)]
+    access_token: Option<String>,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    access_token_expires_at: Option<i64>,
     current_repo: Option<String>,
+    #[serde(default = "default_branch")]
     current_branch: String,
+}
+
+fn default_branch() -> String {
+    "main".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -164,6 +181,14 @@ struct ApiError {
     #[serde(default)]
     details: Option<serde_json::Value>,
     request_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TokenPair {
+    access_token: String,
+    refresh_token: String,
+    token_type: String,
+    expires_in: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -251,6 +276,16 @@ struct RollbackRequest<'a> {
     message: Option<&'a str>,
 }
 
+#[derive(Debug, Serialize)]
+struct ExchangeKeyRequest<'a> {
+    api_key: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct RefreshRequest<'a> {
+    refresh_token: &'a str,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -266,16 +301,32 @@ async fn main() -> Result<()> {
 }
 
 async fn login(args: LoginArgs) -> Result<()> {
-    let profile = CliProfile {
+    let mut profile = CliProfile {
         server: args.server,
-        token: args.token,
+        api_key: args.token,
+        api_key_direct: args.api_key_direct,
+        access_token: None,
+        refresh_token: None,
+        access_token_expires_at: None,
         current_repo: args.repo,
         current_branch: args.branch,
     };
+
+    if !profile.api_key_direct {
+        let client = reqwest::Client::new();
+        exchange_api_key_for_tokens(&client, &mut profile).await?;
+    }
+
     save_profile(&profile)?;
     println!(
-        "login saved: server={}, branch={}",
-        profile.server, profile.current_branch
+        "login saved: server={}, branch={}, mode={}",
+        profile.server,
+        profile.current_branch,
+        if profile.api_key_direct {
+            "api-key-direct"
+        } else {
+            "jwt"
+        }
     );
     Ok(())
 }
@@ -289,16 +340,18 @@ async fn branch(args: BranchArgs) -> Result<()> {
 }
 
 async fn branch_create(args: BranchCreateArgs) -> Result<()> {
-    let profile = load_profile()?;
-    let client = http_client(&profile)?;
+    let mut profile = load_profile()?;
+    let client = reqwest::Client::new();
     let payload = CreateBranchRequest {
         repo_id: &args.repo,
         branch: &args.name,
         from_changeset_id: args.from.as_deref(),
     };
     let url = format!("{}/v2/branches", profile.server.trim_end_matches('/'));
-    let response: ApiResponse<BranchRecord> = send_api(
-        client.post(url).json(&payload),
+    let response: ApiResponse<BranchRecord> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| with_auth(client.post(&url).json(&payload), profile),
         "create branch response decode failed",
     )
     .await?;
@@ -310,15 +363,20 @@ async fn branch_create(args: BranchCreateArgs) -> Result<()> {
 }
 
 async fn branch_list(args: BranchListArgs) -> Result<()> {
-    let profile = load_profile()?;
-    let client = http_client(&profile)?;
+    let mut profile = load_profile()?;
+    let client = reqwest::Client::new();
     let url = format!(
         "{}/v2/branches/{}",
         profile.server.trim_end_matches('/'),
         args.repo
     );
-    let response: ApiResponse<BranchListResponse> =
-        send_api(client.get(url), "list branches response decode failed").await?;
+    let response: ApiResponse<BranchListResponse> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| with_auth(client.get(&url), profile),
+        "list branches response decode failed",
+    )
+    .await?;
     if !response.success {
         return Err(anyhow!(api_error_message(&response, "list branches failed")));
     }
@@ -337,14 +395,19 @@ async fn branch_list(args: BranchListArgs) -> Result<()> {
 
 async fn branch_switch(args: BranchSwitchArgs) -> Result<()> {
     let mut profile = load_profile()?;
-    let client = http_client(&profile)?;
+    let client = reqwest::Client::new();
     let url = format!(
         "{}/v2/branches/{}",
         profile.server.trim_end_matches('/'),
         args.repo
     );
-    let response: ApiResponse<BranchListResponse> =
-        send_api(client.get(url), "switch branch response decode failed").await?;
+    let response: ApiResponse<BranchListResponse> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| with_auth(client.get(&url), profile),
+        "switch branch response decode failed",
+    )
+    .await?;
     if !response.success {
         return Err(anyhow!(api_error_message(&response, "list branches failed")));
     }
@@ -395,12 +458,12 @@ async fn add(args: AddArgs) -> Result<()> {
 }
 
 async fn submit(args: SubmitArgs) -> Result<()> {
-    let profile = load_profile()?;
+    let mut profile = load_profile()?;
     let repo = resolve_repo(&profile, args.repo.as_deref())?;
     let branch = args
         .branch
         .unwrap_or_else(|| profile.current_branch.clone());
-    let client = http_client(&profile)?;
+    let client = reqwest::Client::new();
 
     let mut stage = load_stage().unwrap_or_else(|_| StageFile::default_for_branch(&branch));
     if stage.branch != branch {
@@ -410,14 +473,7 @@ async fn submit(args: SubmitArgs) -> Result<()> {
         return Err(anyhow!("nothing staged; use `ht add --path --blob` first"));
     }
 
-    let base = resolve_base_changeset(
-        &client,
-        &profile,
-        &repo,
-        &branch,
-        stage.base_changeset_id.as_deref(),
-    )
-    .await?;
+    let base = resolve_base_changeset(&client, &mut profile, &repo, &branch, stage.base_changeset_id.as_deref()).await?;
     let author = fetch_owner_id(&client, &profile).await?;
     let payload = SubmitRequest {
         repo_id: &repo,
@@ -431,8 +487,10 @@ async fn submit(args: SubmitArgs) -> Result<()> {
     };
 
     let url = format!("{}/v2/changesets", profile.server.trim_end_matches('/'));
-    let response: ApiResponse<ChangesetRecord> = send_api(
-        client.post(url).json(&payload),
+    let response: ApiResponse<ChangesetRecord> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| with_auth(client.post(&url).json(&payload), profile),
         "submit response decode failed",
     )
     .await?;
@@ -452,12 +510,12 @@ async fn submit(args: SubmitArgs) -> Result<()> {
 }
 
 async fn show_log(args: LogArgs) -> Result<()> {
-    let profile = load_profile()?;
+    let mut profile = load_profile()?;
     let repo = resolve_repo(&profile, args.repo.as_deref())?;
     let branch = args
         .branch
         .unwrap_or_else(|| profile.current_branch.clone());
-    let client = http_client(&profile)?;
+    let client = reqwest::Client::new();
     let url = format!(
         "{}/v2/history/{}?branch={}&limit={}",
         profile.server.trim_end_matches('/'),
@@ -465,8 +523,13 @@ async fn show_log(args: LogArgs) -> Result<()> {
         branch,
         args.limit
     );
-    let response: ApiResponse<HistoryPage> =
-        send_api(client.get(url), "log response decode failed").await?;
+    let response: ApiResponse<HistoryPage> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| with_auth(client.get(&url), profile),
+        "log response decode failed",
+    )
+    .await?;
     if !response.success {
         return Err(anyhow!(api_error_message(&response, "log failed")));
     }
@@ -478,12 +541,12 @@ async fn show_log(args: LogArgs) -> Result<()> {
 }
 
 async fn rollback(args: RollbackArgs) -> Result<()> {
-    let profile = load_profile()?;
+    let mut profile = load_profile()?;
     let repo = resolve_repo(&profile, args.repo.as_deref())?;
     let branch = args
         .branch
         .unwrap_or_else(|| profile.current_branch.clone());
-    let client = http_client(&profile)?;
+    let client = reqwest::Client::new();
     let author = match args.author {
         Some(author) => author,
         None => fetch_owner_id(&client, &profile).await?,
@@ -496,8 +559,10 @@ async fn rollback(args: RollbackArgs) -> Result<()> {
         message: args.message.as_deref(),
     };
     let url = format!("{}/v2/rollback", profile.server.trim_end_matches('/'));
-    let response: ApiResponse<serde_json::Value> = send_api(
-        client.post(url).json(&payload),
+    let response: ApiResponse<serde_json::Value> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| with_auth(client.post(&url).json(&payload), profile),
         "rollback response decode failed",
     )
     .await?;
@@ -512,12 +577,12 @@ async fn rollback(args: RollbackArgs) -> Result<()> {
 }
 
 async fn sync(args: SyncArgs) -> Result<()> {
-    let profile = load_profile()?;
+    let mut profile = load_profile()?;
     let repo = resolve_repo(&profile, args.repo.as_deref())?;
     let branch = args
         .branch
         .unwrap_or_else(|| profile.current_branch.clone());
-    let client = http_client(&profile)?;
+    let client = reqwest::Client::new();
     let mut url = format!(
         "{}/v2/sync/{}?branch={}",
         profile.server.trim_end_matches('/'),
@@ -529,8 +594,13 @@ async fn sync(args: SyncArgs) -> Result<()> {
         url.push_str(to);
     }
 
-    let response: ApiResponse<SyncResponse> =
-        send_api(client.get(url), "sync response decode failed").await?;
+    let response: ApiResponse<SyncResponse> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| with_auth(client.get(&url), profile),
+        "sync response decode failed",
+    )
+    .await?;
     if !response.success {
         return Err(anyhow!(api_error_message(&response, "sync failed")));
     }
@@ -554,7 +624,7 @@ async fn sync(args: SyncArgs) -> Result<()> {
 
 async fn resolve_base_changeset(
     client: &reqwest::Client,
-    profile: &CliProfile,
+    profile: &mut CliProfile,
     repo: &str,
     branch: &str,
     current: Option<&str>,
@@ -568,8 +638,13 @@ async fn resolve_base_changeset(
         profile.server.trim_end_matches('/'),
         repo
     );
-    let response: ApiResponse<BranchListResponse> =
-        send_api(client.get(url), "resolve base response decode failed").await?;
+    let response: ApiResponse<BranchListResponse> = send_authed_api(
+        client,
+        profile,
+        |client, profile| with_auth(client.get(&url), profile),
+        "resolve base response decode failed",
+    )
+    .await?;
     if !response.success {
         return Err(anyhow!(
             "{}",
@@ -589,24 +664,114 @@ async fn resolve_base_changeset(
 
 async fn fetch_owner_id(client: &reqwest::Client, profile: &CliProfile) -> Result<String> {
     let url = format!("{}/v2/auth/verify", profile.server.trim_end_matches('/'));
-    let response: ApiResponse<VerifyResponse> =
-        send_api(client.get(url), "verify response decode failed").await?;
-    if !response.success {
-        return Err(anyhow!(api_error_message(&response, "verify failed")));
+    let response: HttpResponse<VerifyResponse> = execute_api(
+        client.get(url).header("X-API-Key", &profile.api_key),
+        "verify response decode failed",
+    )
+    .await?;
+    if !response.payload.success {
+        return Err(anyhow!(api_error_message(&response.payload, "verify failed")));
     }
-    let verify = response.data.context("missing verify data")?;
+    let verify = response.payload.data.context("missing verify data")?;
     if !verify.valid {
         return Err(anyhow!("api key is invalid"));
     }
     verify.owner_id.context("missing owner_id from verify")
 }
 
-fn http_client(profile: &CliProfile) -> Result<reqwest::Client> {
-    let mut headers = HeaderMap::new();
-    headers.insert("X-API-Key", HeaderValue::from_str(&profile.token)?);
-    Ok(reqwest::Client::builder()
-        .default_headers(headers)
-        .build()?)
+fn with_auth(request: RequestBuilder, profile: &CliProfile) -> RequestBuilder {
+    if profile.api_key_direct {
+        return request.header("X-API-Key", &profile.api_key);
+    }
+    if let Some(access_token) = profile.access_token.as_deref() {
+        return request.bearer_auth(access_token);
+    }
+    request.header("X-API-Key", &profile.api_key)
+}
+
+fn now_unix() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn token_expired(profile: &CliProfile) -> bool {
+    let Some(expires_at) = profile.access_token_expires_at else {
+        return true;
+    };
+    now_unix() >= expires_at - 30
+}
+
+fn apply_token_pair(profile: &mut CliProfile, pair: TokenPair) {
+    profile.access_token = Some(pair.access_token);
+    profile.refresh_token = Some(pair.refresh_token);
+    profile.access_token_expires_at = Some(now_unix() + pair.expires_in.max(0));
+}
+
+async fn exchange_api_key_for_tokens(client: &reqwest::Client, profile: &mut CliProfile) -> Result<()> {
+    let url = format!(
+        "{}/v2/auth/exchange-key",
+        profile.server.trim_end_matches('/')
+    );
+    let payload = ExchangeKeyRequest {
+        api_key: &profile.api_key,
+    };
+    let response: HttpResponse<TokenPair> = execute_api(
+        client.post(url).json(&payload),
+        "exchange-key response decode failed",
+    )
+    .await?;
+    if !response.payload.success {
+        return Err(anyhow!(
+            "{}",
+            api_error_message(&response.payload, "exchange-key failed")
+        ));
+    }
+    let token_pair = response
+        .payload
+        .data
+        .context("missing token pair in exchange-key response")?;
+    apply_token_pair(profile, token_pair);
+    Ok(())
+}
+
+async fn refresh_access_token(client: &reqwest::Client, profile: &mut CliProfile) -> Result<()> {
+    let refresh_token = profile
+        .refresh_token
+        .clone()
+        .ok_or_else(|| anyhow!("refresh token missing; run `ht login` again"))?;
+    let url = format!("{}/v2/auth/refresh", profile.server.trim_end_matches('/'));
+    let payload = RefreshRequest {
+        refresh_token: &refresh_token,
+    };
+    let response: HttpResponse<TokenPair> =
+        execute_api(client.post(url).json(&payload), "refresh response decode failed").await?;
+    if !response.payload.success {
+        return Err(anyhow!(
+            "{}",
+            api_error_message(&response.payload, "refresh failed")
+        ));
+    }
+    let token_pair = response
+        .payload
+        .data
+        .context("missing token pair in refresh response")?;
+    apply_token_pair(profile, token_pair);
+    save_profile(profile)?;
+    Ok(())
+}
+
+async fn ensure_access_token(client: &reqwest::Client, profile: &mut CliProfile) -> Result<()> {
+    if profile.api_key_direct {
+        return Ok(());
+    }
+    if !token_expired(profile) {
+        return Ok(());
+    }
+    refresh_access_token(client, profile)
+        .await
+        .map_err(|error| anyhow!("{error}. please run `ht login --server ... --token ...`"))
 }
 
 fn api_error_message<T>(response: &ApiResponse<T>, fallback: &str) -> String {
@@ -622,16 +787,42 @@ fn api_error_message<T>(response: &ApiResponse<T>, fallback: &str) -> String {
         .unwrap_or_else(|| fallback.to_string())
 }
 
-async fn send_api<T: DeserializeOwned>(
+async fn send_authed_api<T: DeserializeOwned, F>(
+    client: &reqwest::Client,
+    profile: &mut CliProfile,
+    build_request: F,
+    context: &str,
+) -> Result<ApiResponse<T>>
+where
+    F: Fn(&reqwest::Client, &CliProfile) -> RequestBuilder,
+{
+    ensure_access_token(client, profile).await?;
+
+    let mut response: HttpResponse<T> = execute_api(build_request(client, profile), context).await?;
+    if !profile.api_key_direct && response.status == StatusCode::UNAUTHORIZED {
+        refresh_access_token(client, profile)
+            .await
+            .map_err(|error| anyhow!("{error}. please run `ht login --server ... --token ...`"))?;
+        response = execute_api(build_request(client, profile), context).await?;
+    }
+    Ok(response.payload)
+}
+
+struct HttpResponse<T> {
+    status: StatusCode,
+    payload: ApiResponse<T>,
+}
+
+async fn execute_api<T: DeserializeOwned>(
     request: reqwest::RequestBuilder,
     context: &str,
-) -> Result<ApiResponse<T>> {
+) -> Result<HttpResponse<T>> {
     let response = request.send().await?;
     let status = response.status();
     let body = response.text().await?;
 
     match serde_json::from_str::<ApiResponse<T>>(&body) {
-        Ok(payload) => Ok(payload),
+        Ok(payload) => Ok(HttpResponse { status, payload }),
         Err(_) => Err(anyhow!(
             "{}: HTTP {} with non-JSON response body: {}",
             context,
