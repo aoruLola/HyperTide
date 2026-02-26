@@ -316,6 +316,8 @@ pub async fn submit_changeset(
                             "branch": changeset.branch,
                             "status": changeset.status,
                             "base_changeset_id": changeset.base_changeset_id,
+                            "staging_ref": changeset.staging_ref,
+                            "visible_ref": changeset.visible_ref,
                         }),
                     )
                     .await
@@ -334,6 +336,8 @@ pub async fn submit_changeset(
                             "branch": changeset.branch,
                             "status": changeset.status,
                             "base_changeset_id": changeset.base_changeset_id,
+                            "staging_ref": changeset.staging_ref,
+                            "visible_ref": changeset.visible_ref,
                         }),
                     )
                     .await
@@ -527,6 +531,8 @@ pub async fn approve_changeset(
                         json!({
                             "branch": changeset.branch,
                             "status": changeset.status,
+                            "staging_ref": changeset.staging_ref,
+                            "visible_ref": changeset.visible_ref,
                         }),
                     )
                     .await
@@ -544,6 +550,8 @@ pub async fn approve_changeset(
                         json!({
                             "branch": changeset.branch,
                             "status": changeset.status,
+                            "staging_ref": changeset.staging_ref,
+                            "visible_ref": changeset.visible_ref,
                         }),
                     )
                     .await
@@ -605,6 +613,8 @@ pub async fn promote_changeset(
                             "branch": changeset.branch,
                             "status": changeset.status,
                             "promoted_at": changeset.promoted_at,
+                            "staging_ref": changeset.staging_ref,
+                            "visible_ref": changeset.visible_ref,
                         }),
                     )
                     .await
@@ -623,6 +633,8 @@ pub async fn promote_changeset(
                             "branch": changeset.branch,
                             "status": changeset.status,
                             "promoted_at": changeset.promoted_at,
+                            "staging_ref": changeset.staging_ref,
+                            "visible_ref": changeset.visible_ref,
                         }),
                     )
                     .await

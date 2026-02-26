@@ -57,6 +57,14 @@ fn default_changeset_status() -> ChangesetStatus {
     ChangesetStatus::Visible
 }
 
+fn staging_ref(repo_id: &str, branch: &str, changeset_id: &str) -> String {
+    format!("refs/ht/staging/{repo_id}/{branch}/{changeset_id}")
+}
+
+fn visible_ref(branch: &str) -> String {
+    format!("refs/heads/{branch}")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetDelta {
     #[serde(default)]
@@ -84,6 +92,10 @@ pub struct ChangesetRecord {
     pub approved_by: Option<String>,
     pub approved_at: Option<DateTime<Utc>>,
     pub promoted_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub staging_ref: Option<String>,
+    #[serde(default)]
+    pub visible_ref: Option<String>,
     pub assets: Vec<AssetDelta>,
 }
 
@@ -459,6 +471,7 @@ impl VersionManager {
                 record.approved_at = Some(Utc::now());
             }
             record.promoted_at = Some(Utc::now());
+            record.visible_ref = Some(visible_ref(&record.branch));
 
             (record.clone(), repos.clone())
         };
@@ -744,6 +757,20 @@ impl VersionManager {
         }
 
         let changeset_id = Uuid::new_v4().to_string();
+        let status = match visibility {
+            ChangesetVisibility::Visible => ChangesetStatus::Visible,
+            ChangesetVisibility::Draft => ChangesetStatus::Draft,
+        };
+        let staging_ref_value = if status == ChangesetStatus::Draft {
+            Some(staging_ref(&repo_id, &branch, &changeset_id))
+        } else {
+            None
+        };
+        let visible_ref_value = if status == ChangesetStatus::Visible {
+            Some(visible_ref(&branch))
+        } else {
+            None
+        };
         let record = ChangesetRecord {
             changeset_id: changeset_id.clone(),
             repo_id,
@@ -755,13 +782,12 @@ impl VersionManager {
             author,
             message,
             created_at: Utc::now(),
-            status: match visibility {
-                ChangesetVisibility::Visible => ChangesetStatus::Visible,
-                ChangesetVisibility::Draft => ChangesetStatus::Draft,
-            },
+            status,
             approved_by: None,
             approved_at: None,
             promoted_at: None,
+            staging_ref: staging_ref_value,
+            visible_ref: visible_ref_value,
             assets: normalized_assets,
         };
 
@@ -1091,6 +1117,57 @@ mod tests {
             .sync_snapshot("repo-c", "main", None)
             .expect("snapshot");
         assert_eq!(sync.assets[0].blob_hash, "h1");
+    }
+
+    #[tokio::test]
+    async fn draft_changeset_uses_staging_ref_and_promote_sets_visible_ref() {
+        let manager = VersionManager::new();
+
+        let base = manager
+            .submit_changeset(SubmitChangesetInput {
+                repo_id: "repo-gate".to_string(),
+                branch: "main".to_string(),
+                base_changeset_id: Some(ROOT_BASE_CHANGESET_ID.to_string()),
+                kind: ChangesetKind::Normal,
+                rollback_of: None,
+                author: "alice".to_string(),
+                message: "base".to_string(),
+                visibility: ChangesetVisibility::Visible,
+                assets: vec![],
+            })
+            .await
+            .expect("base changeset");
+
+        let draft = manager
+            .submit_changeset(SubmitChangesetInput {
+                repo_id: "repo-gate".to_string(),
+                branch: "main".to_string(),
+                base_changeset_id: Some(base.changeset_id.clone()),
+                kind: ChangesetKind::Normal,
+                rollback_of: None,
+                author: "alice".to_string(),
+                message: "draft".to_string(),
+                visibility: ChangesetVisibility::Draft,
+                assets: vec![],
+            })
+            .await
+            .expect("draft changeset");
+
+        assert!(draft.staging_ref.is_some());
+        assert_eq!(draft.visible_ref, None);
+
+        let approved = manager
+            .approve_changeset("repo-gate", &draft.changeset_id, "reviewer")
+            .await
+            .expect("approve draft");
+        assert_eq!(approved.visible_ref, None);
+
+        let promoted = manager
+            .promote_changeset("repo-gate", &draft.changeset_id, "release-bot")
+            .await
+            .expect("promote approved");
+        assert_eq!(promoted.visible_ref.as_deref(), Some("refs/heads/main"));
+        assert!(promoted.staging_ref.is_some());
     }
 
     #[tokio::test]

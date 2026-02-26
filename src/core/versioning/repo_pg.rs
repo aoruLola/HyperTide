@@ -44,6 +44,8 @@ struct ChangesetRow {
     approved_by: Option<String>,
     approved_at: Option<DateTime<Utc>>,
     promoted_at: Option<DateTime<Utc>>,
+    staging_ref: Option<String>,
+    visible_ref: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -130,6 +132,7 @@ impl VersionRepoPg {
             let changeset_rows = sqlx::query_as::<_, ChangesetRow>(
                 r#"
                 SELECT changeset_id, repo_id, branch_name, parent_changeset_id, base_changeset_id, kind, rollback_of, author, message, created_at, status, approved_by, approved_at, promoted_at
+                       , staging_ref, visible_ref
                 FROM changesets
                 WHERE repo_id = $1
                 ORDER BY created_at ASC
@@ -157,6 +160,8 @@ impl VersionRepoPg {
                         approved_by: row.approved_by,
                         approved_at: row.approved_at,
                         promoted_at: row.promoted_at,
+                        staging_ref: row.staging_ref,
+                        visible_ref: row.visible_ref,
                         assets: Vec::new(),
                     },
                 );
@@ -275,9 +280,9 @@ impl VersionRepoPg {
             sqlx::query(
                 r#"
                 INSERT INTO changesets (
-                    changeset_id, repo_id, branch_name, parent_changeset_id, base_changeset_id, kind, rollback_of, author, message, created_at, status, approved_by, approved_at, promoted_at
+                    changeset_id, repo_id, branch_name, parent_changeset_id, base_changeset_id, kind, rollback_of, author, message, created_at, status, approved_by, approved_at, promoted_at, staging_ref, visible_ref
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
                 "#,
             )
             .bind(&changeset.changeset_id)
@@ -294,6 +299,8 @@ impl VersionRepoPg {
             .bind(&changeset.approved_by)
             .bind(changeset.approved_at)
             .bind(changeset.promoted_at)
+            .bind(&changeset.staging_ref)
+            .bind(&changeset.visible_ref)
             .execute(&mut *tx)
             .await?;
 
