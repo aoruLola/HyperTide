@@ -23,8 +23,8 @@ use crate::api::lock::{force_unlock_file, list_locks, lock_file, renew_lock_file
 use crate::api::manifests::create_manifest;
 use crate::api::storage::{calculate_hash, check_exists, download_file, upload_file};
 use crate::api::trust::{
-    attest_checkpoint, generate_checkpoint, latest_checkpoint, replay_readiness,
-    verify_audit_chain, verify_replay, witness_summary,
+    attest_checkpoint, export_audit_entries, generate_checkpoint, latest_checkpoint,
+    replay_readiness, verify_audit_chain, verify_replay, witness_summary,
 };
 use crate::api::versioning::{
     approve_changeset, changeset_gate, create_branch, list_branches, list_history,
@@ -146,6 +146,7 @@ fn build_app(state: AppState) -> Router {
         )
         .route("/v2/trust/witness/summary", get(witness_summary))
         .route("/v2/trust/audit/verify", post(verify_audit_chain))
+        .route("/v2/trust/audit/export", get(export_audit_entries))
         .route("/v2/trust/replay/verify", post(verify_replay))
         .route("/v2/trust/replay/readiness", get(replay_readiness))
         .layer(cors)
@@ -421,5 +422,32 @@ mod tests {
 
         let response = app.oneshot(request).await.expect("response");
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn audit_export_rejects_missing_api_key() {
+        let app = build_app(test_state());
+
+        let request = Request::builder()
+            .uri("/v2/trust/audit/export")
+            .body(Body::empty())
+            .expect("request");
+
+        let response = app.oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn audit_export_returns_503_when_service_unavailable() {
+        let app = build_app(test_state());
+
+        let request = Request::builder()
+            .uri("/v2/trust/audit/export")
+            .header("X-API-Key", DEV_MASTER_KEY)
+            .body(Body::empty())
+            .expect("request");
+
+        let response = app.oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }

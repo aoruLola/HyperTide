@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgPool, Postgres, QueryBuilder};
 
 #[derive(Clone)]
 pub struct AuditChain {
@@ -14,6 +14,19 @@ pub struct AuditVerifyResult {
     pub checked: i64,
     pub broken_at_seq: Option<i64>,
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditChainEntry {
+    pub seq: i64,
+    pub prev_hash: String,
+    pub entry_hash: String,
+    pub action: String,
+    pub actor_id: String,
+    pub repo_id: Option<String>,
+    pub target_id: Option<String>,
+    pub payload: Value,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, FromRow)]
@@ -154,5 +167,66 @@ impl AuditChain {
             broken_at_seq: None,
             reason: None,
         })
+    }
+
+    pub async fn list_entries(
+        &self,
+        limit: i64,
+        before_seq: Option<i64>,
+        action: Option<&str>,
+        actor_id: Option<&str>,
+    ) -> Result<Vec<AuditChainEntry>, sqlx::Error> {
+        let safe_limit = limit.clamp(1, 2000);
+        let mut builder = QueryBuilder::<Postgres>::new(
+            "SELECT seq, prev_hash, entry_hash, action, actor_id, repo_id, target_id, payload, created_at FROM audit_chain_entries",
+        );
+
+        let mut has_where = false;
+        if let Some(seq) = before_seq {
+            builder.push(" WHERE seq < ");
+            builder.push_bind(seq);
+            has_where = true;
+        }
+        if let Some(action) = action {
+            if has_where {
+                builder.push(" AND ");
+            } else {
+                builder.push(" WHERE ");
+                has_where = true;
+            }
+            builder.push("action = ");
+            builder.push_bind(action);
+        }
+        if let Some(actor_id) = actor_id {
+            if has_where {
+                builder.push(" AND ");
+            } else {
+                builder.push(" WHERE ");
+            }
+            builder.push("actor_id = ");
+            builder.push_bind(actor_id);
+        }
+
+        builder.push(" ORDER BY seq ASC LIMIT ");
+        builder.push_bind(safe_limit);
+
+        let rows = builder
+            .build_query_as::<AuditRow>()
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| AuditChainEntry {
+                seq: row.seq,
+                prev_hash: row.prev_hash,
+                entry_hash: row.entry_hash,
+                action: row.action,
+                actor_id: row.actor_id,
+                repo_id: row.repo_id,
+                target_id: row.target_id,
+                payload: row.payload,
+                created_at: row.created_at,
+            })
+            .collect())
     }
 }

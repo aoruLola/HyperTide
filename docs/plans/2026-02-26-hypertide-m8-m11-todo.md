@@ -41,6 +41,6 @@
 | M11-003 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | done | codex | P0 | 2026-04-10 | none |
 | M11-004 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | todo | codex | P1 | 2026-04-12 | M9 close |
 | M11-005 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | todo | codex | P1 | 2026-04-12 | M11-004 |
-| M11-006 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | todo | codex | P1 | 2026-04-13 | M10 close |
+| M11-006 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | in_progress | codex | P1 | 2026-04-13 | none |
 | M11-007 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | todo | codex | P1 | 2026-04-14 | M10-005 |
 | M11-008 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | todo | codex | P1 | 2026-04-15 | M11-001~007 |

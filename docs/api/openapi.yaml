@@ -336,6 +336,31 @@ paths:
         - BearerAuth: []
       responses:
         '200': { description: Verify result }
+  /v2/trust/audit/export:
+    get:
+      summary: Export audit chain entries (compliance)
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer }
+        - in: query
+          name: before_seq
+          required: false
+          schema: { type: integer }
+        - in: query
+          name: action
+          required: false
+          schema: { type: string }
+        - in: query
+          name: actor_id
+          required: false
+          schema: { type: string }
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Audit entries exported }
   /v2/trust/replay/verify:
     post:
       summary: Verify event replay consistency against current state

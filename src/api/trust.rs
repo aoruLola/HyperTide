@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use crate::api::{common::ApiResponse, middleware::authz};
 use crate::core::{
-    audit_chain::AuditVerifyResult,
+    audit_chain::{AuditChainEntry, AuditVerifyResult},
     auth::Permission,
     checkpoint::CheckpointRecord,
     replay::{ReplayReadinessReport, ReplayVerification},
@@ -86,6 +86,14 @@ pub struct AttestRequest {
 #[derive(Debug, Deserialize)]
 pub struct WitnessSummaryQuery {
     pub checkpoint_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AuditExportQuery {
+    pub limit: Option<i64>,
+    pub before_seq: Option<i64>,
+    pub action: Option<String>,
+    pub actor_id: Option<String>,
 }
 
 pub async fn attest_checkpoint(
@@ -205,6 +213,39 @@ pub async fn replay_readiness(
             Json(ApiResponse::err(format!(
                 "failed to build replay readiness report: {error}"
             ))),
+        ),
+    }
+}
+
+pub async fn export_audit_entries(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AuditExportQuery>,
+) -> (StatusCode, Json<ApiResponse<Vec<AuditChainEntry>>>) {
+    if let Err((status, message)) = require_permission(&state, &headers, Permission::Admin).await {
+        return (status, Json(ApiResponse::err(message)));
+    }
+
+    let Some(audit_chain) = &state.audit_chain else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse::err("audit chain unavailable")),
+        );
+    };
+
+    match audit_chain
+        .list_entries(
+            query.limit.unwrap_or(200),
+            query.before_seq,
+            query.action.as_deref(),
+            query.actor_id.as_deref(),
+        )
+        .await
+    {
+        Ok(entries) => (StatusCode::OK, Json(ApiResponse::ok(entries))),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::err(format!("failed to export audit entries: {error}"))),
         ),
     }
 }
