@@ -23,8 +23,8 @@
 | M9-003 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m9-git--p4-core-mechanics | done | codex | P0 | 2026-03-21 | none |
 | M9-004 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m9-git--p4-core-mechanics | done | codex | P0 | 2026-03-21 | none |
 | M9-005 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m9-git--p4-core-mechanics | done | codex | P0 | 2026-03-22 | none |
-| M9-006 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m9-git--p4-core-mechanics | todo | codex | P0 | 2026-03-22 | M9-004 |
-| M9-007 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m9-git--p4-core-mechanics | todo | codex | P0 | 2026-03-23 | M9-006 |
+| M9-006 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m9-git--p4-core-mechanics | done | codex | P0 | 2026-03-22 | none |
+| M9-007 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m9-git--p4-core-mechanics | done | codex | P0 | 2026-03-23 | none |
 | M9-008 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m9-git--p4-core-mechanics | todo | codex | P0 | 2026-03-24 | M9-001~007 |
 | M9-009 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m9-git--p4-core-mechanics | todo | codex | P1 | 2026-03-24 | M8-007 |
 | M9-010 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m9-git--p4-core-mechanics | todo | codex | P1 | 2026-03-25 | M9-002~005 |

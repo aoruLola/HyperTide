@@ -5,6 +5,7 @@ use sqlx::{FromRow, PgPool};
 
 use crate::core::versioning::{
     AssetDelta, BranchRecord, BranchState, ChangesetKind, ChangesetRecord, RepoState,
+    SnapshotAsset,
 };
 
 #[derive(Clone)]
@@ -44,13 +45,17 @@ struct ChangesetRow {
 #[derive(Debug, FromRow)]
 struct AssetDeltaRow {
     changeset_id: String,
+    asset_id: Option<String>,
     path: String,
+    from_blob_hash: Option<String>,
+    to_blob_hash: Option<String>,
     blob_hash: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
 struct SnapshotRow {
     changeset_id: String,
+    asset_id: Option<String>,
     path: String,
     blob_hash: String,
 }
@@ -151,7 +156,7 @@ impl VersionRepoPg {
 
             let delta_rows = sqlx::query_as::<_, AssetDeltaRow>(
                 r#"
-                SELECT d.changeset_id, d.path, d.blob_hash
+                SELECT d.changeset_id, d.asset_id, d.path, d.from_blob_hash, d.to_blob_hash, d.blob_hash
                 FROM asset_deltas d
                 INNER JOIN changesets c ON c.changeset_id = d.changeset_id
                 WHERE c.repo_id = $1
@@ -165,15 +170,17 @@ impl VersionRepoPg {
             for delta in delta_rows {
                 if let Some(changeset) = repo.changesets.get_mut(&delta.changeset_id) {
                     changeset.assets.push(AssetDelta {
+                        asset_id: delta.asset_id,
                         path: delta.path,
-                        blob_hash: delta.blob_hash,
+                        from_blob_hash: delta.from_blob_hash,
+                        blob_hash: delta.to_blob_hash.or(delta.blob_hash),
                     });
                 }
             }
 
             let snapshot_rows = sqlx::query_as::<_, SnapshotRow>(
                 r#"
-                SELECT changeset_id, path, blob_hash
+                SELECT changeset_id, asset_id, path, blob_hash
                 FROM snapshots
                 WHERE repo_id = $1
                 ORDER BY id ASC
@@ -184,10 +191,18 @@ impl VersionRepoPg {
             .await?;
 
             for row in snapshot_rows {
+                let asset_id = row.asset_id.unwrap_or_else(|| row.path.clone());
                 repo.snapshots
                     .entry(row.changeset_id)
                     .or_insert_with(HashMap::new)
-                    .insert(row.path, row.blob_hash);
+                    .insert(
+                        asset_id.clone(),
+                        SnapshotAsset {
+                            asset_id,
+                            path: row.path,
+                            blob_hash: row.blob_hash,
+                        },
+                    );
             }
 
             let branch_heads = repo
@@ -269,12 +284,15 @@ impl VersionRepoPg {
             for delta in &changeset.assets {
                 sqlx::query(
                     r#"
-                    INSERT INTO asset_deltas (changeset_id, path, blob_hash)
-                    VALUES ($1, $2, $3)
+                    INSERT INTO asset_deltas (changeset_id, asset_id, path, from_blob_hash, to_blob_hash, blob_hash)
+                    VALUES ($1, $2, $3, $4, $5, $6)
                     "#,
                 )
                 .bind(&changeset.changeset_id)
+                .bind(delta.asset_id.as_deref().unwrap_or(&delta.path))
                 .bind(&delta.path)
+                .bind(&delta.from_blob_hash)
+                .bind(&delta.blob_hash)
                 .bind(&delta.blob_hash)
                 .execute(&mut *tx)
                 .await?;
@@ -282,18 +300,19 @@ impl VersionRepoPg {
         }
 
         for (changeset_id, snapshot) in &repo.snapshots {
-            for (path, blob_hash) in snapshot {
+            for (asset_id, snapshot_asset) in snapshot {
                 sqlx::query(
                     r#"
-                    INSERT INTO snapshots (repo_id, branch_name, changeset_id, path, blob_hash)
-                    VALUES ($1, $2, $3, $4, $5)
+                    INSERT INTO snapshots (repo_id, branch_name, changeset_id, asset_id, path, blob_hash)
+                    VALUES ($1, $2, $3, $4, $5, $6)
                     "#,
                 )
                 .bind(repo_id)
                 .bind(&repo.default_branch)
                 .bind(changeset_id)
-                .bind(path)
-                .bind(blob_hash)
+                .bind(asset_id)
+                .bind(&snapshot_asset.path)
+                .bind(&snapshot_asset.blob_hash)
                 .execute(&mut *tx)
                 .await?;
             }

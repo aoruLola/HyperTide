@@ -30,7 +30,11 @@ impl ChangesetKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetDelta {
+    #[serde(default)]
+    pub asset_id: Option<String>,
     pub path: String,
+    #[serde(default)]
+    pub from_blob_hash: Option<String>,
     pub blob_hash: Option<String>,
 }
 
@@ -86,6 +90,14 @@ pub struct SyncSnapshot {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SnapshotEntry {
+    pub asset_id: String,
+    pub path: String,
+    pub blob_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct SnapshotAsset {
+    pub asset_id: String,
     pub path: String,
     pub blob_hash: String,
 }
@@ -397,24 +409,31 @@ impl VersionManager {
                 changeset_id: target_changeset_id.to_string(),
             })?;
 
-        let mut paths = BTreeSet::new();
+        let mut asset_ids = BTreeSet::new();
         current.keys().for_each(|k| {
-            paths.insert(k.clone());
+            asset_ids.insert(k.clone());
         });
         target.keys().for_each(|k| {
-            paths.insert(k.clone());
+            asset_ids.insert(k.clone());
         });
 
         let mut assets = Vec::new();
-        for path in paths {
-            let current_hash = current.get(&path);
-            let target_hash = target.get(&path);
+        for asset_id in asset_ids {
+            let current_asset = current.get(&asset_id);
+            let target_asset = target.get(&asset_id);
+            let current_hash = current_asset.map(|asset| asset.blob_hash.as_str());
+            let target_hash = target_asset.map(|asset| asset.blob_hash.as_str());
             if current_hash == target_hash {
                 continue;
             }
             assets.push(AssetDelta {
-                path,
-                blob_hash: target_hash.cloned(),
+                asset_id: Some(asset_id.clone()),
+                path: target_asset
+                    .map(|asset| asset.path.clone())
+                    .or_else(|| current_asset.map(|asset| asset.path.clone()))
+                    .unwrap_or(asset_id),
+                from_blob_hash: current_asset.map(|asset| asset.blob_hash.clone()),
+                blob_hash: target_asset.map(|asset| asset.blob_hash.clone()),
             });
         }
 
@@ -466,9 +485,17 @@ impl VersionManager {
             .unwrap_or_default();
         let mut assets: Vec<SnapshotEntry> = snapshot_map
             .into_iter()
-            .map(|(path, blob_hash)| SnapshotEntry { path, blob_hash })
+            .map(|(asset_id, asset)| SnapshotEntry {
+                asset_id,
+                path: asset.path,
+                blob_hash: asset.blob_hash,
+            })
             .collect();
-        assets.sort_by(|a, b| a.path.cmp(&b.path));
+        assets.sort_by(|a, b| {
+            a.path
+                .cmp(&b.path)
+                .then_with(|| a.asset_id.cmp(&b.asset_id))
+        });
 
         Ok(SyncSnapshot {
             repo_id: repo_id.to_string(),
@@ -482,33 +509,44 @@ impl VersionManager {
         repo: &mut RepoState,
         input: SubmitChangesetInput,
     ) -> Result<ChangesetRecord, VersioningError> {
-        if input.base_changeset_id.is_none() {
+        let SubmitChangesetInput {
+            repo_id,
+            branch,
+            base_changeset_id,
+            kind,
+            rollback_of,
+            author,
+            message,
+            assets,
+        } = input;
+
+        if base_changeset_id.is_none() {
             return Err(VersioningError::BaseChangesetRequired);
         }
 
-        let branch_state = repo.branches.get_mut(&input.branch).ok_or_else(|| {
+        let branch_state = repo.branches.get_mut(&branch).ok_or_else(|| {
             VersioningError::BranchNotFound {
-                repo_id: input.repo_id.clone(),
-                branch: input.branch.clone(),
+                repo_id: repo_id.clone(),
+                branch: branch.clone(),
             }
         })?;
 
         let expected = branch_state.record.head_changeset_id.clone();
         if expected.is_none() {
-            if input.base_changeset_id.as_deref() != Some(ROOT_BASE_CHANGESET_ID) {
+            if base_changeset_id.as_deref() != Some(ROOT_BASE_CHANGESET_ID) {
                 return Err(VersioningError::BaseChangesetMismatch {
-                    repo_id: input.repo_id,
-                    branch: input.branch,
+                    repo_id,
+                    branch,
                     expected,
-                    got: input.base_changeset_id,
+                    got: base_changeset_id,
                 });
             }
-        } else if input.base_changeset_id != expected {
+        } else if base_changeset_id != expected {
             return Err(VersioningError::BaseChangesetMismatch {
-                repo_id: input.repo_id,
-                branch: input.branch,
+                repo_id,
+                branch,
                 expected,
-                got: input.base_changeset_id,
+                got: base_changeset_id,
             });
         }
 
@@ -519,27 +557,45 @@ impl VersionManager {
             .cloned()
             .unwrap_or_default();
 
-        for asset in &input.assets {
+        let mut normalized_assets = Vec::with_capacity(assets.len());
+        for mut asset in assets {
+            let asset_id = asset
+                .asset_id
+                .clone()
+                .unwrap_or_else(|| asset.path.clone());
+            asset.asset_id = Some(asset_id.clone());
+            asset.from_blob_hash = new_snapshot
+                .get(&asset_id)
+                .map(|snapshot_asset| snapshot_asset.blob_hash.clone());
+
             if let Some(hash) = &asset.blob_hash {
-                new_snapshot.insert(asset.path.clone(), hash.clone());
+                new_snapshot.insert(
+                    asset_id.clone(),
+                    SnapshotAsset {
+                        asset_id,
+                        path: asset.path.clone(),
+                        blob_hash: hash.clone(),
+                    },
+                );
             } else {
-                new_snapshot.remove(&asset.path);
+                new_snapshot.remove(&asset_id);
             }
+            normalized_assets.push(asset);
         }
 
         let changeset_id = Uuid::new_v4().to_string();
         let record = ChangesetRecord {
             changeset_id: changeset_id.clone(),
-            repo_id: input.repo_id,
-            branch: input.branch.clone(),
+            repo_id,
+            branch: branch.clone(),
             parent_changeset_id,
-            base_changeset_id: input.base_changeset_id,
-            kind: input.kind,
-            rollback_of: input.rollback_of,
-            author: input.author,
-            message: input.message,
+            base_changeset_id,
+            kind,
+            rollback_of,
+            author,
+            message,
             created_at: Utc::now(),
-            assets: input.assets,
+            assets: normalized_assets,
         };
 
         repo.snapshots.insert(changeset_id.clone(), new_snapshot);
@@ -642,7 +698,7 @@ pub(super) struct RepoState {
     default_branch: String,
     branches: HashMap<String, BranchState>,
     changesets: HashMap<String, ChangesetRecord>,
-    snapshots: HashMap<String, HashMap<String, String>>,
+    snapshots: HashMap<String, HashMap<String, SnapshotAsset>>,
 }
 
 impl RepoState {
@@ -714,7 +770,9 @@ mod tests {
                 author: "alice".to_string(),
                 message: "first".to_string(),
                 assets: vec![AssetDelta {
+                    asset_id: None,
                     path: "a.txt".to_string(),
+                    from_blob_hash: None,
                     blob_hash: Some("hash-1".to_string()),
                 }],
             })
@@ -731,7 +789,9 @@ mod tests {
                 author: "alice".to_string(),
                 message: "second".to_string(),
                 assets: vec![AssetDelta {
+                    asset_id: None,
                     path: "a.txt".to_string(),
+                    from_blob_hash: None,
                     blob_hash: Some("hash-2".to_string()),
                 }],
             })
@@ -802,7 +862,9 @@ mod tests {
                 author: "alice".to_string(),
                 message: "first".to_string(),
                 assets: vec![AssetDelta {
+                    asset_id: None,
                     path: "a".to_string(),
+                    from_blob_hash: None,
                     blob_hash: Some("h1".to_string()),
                 }],
             })
@@ -819,7 +881,9 @@ mod tests {
                 author: "alice".to_string(),
                 message: "second".to_string(),
                 assets: vec![AssetDelta {
+                    asset_id: None,
                     path: "a".to_string(),
+                    from_blob_hash: None,
                     blob_hash: Some("h2".to_string()),
                 }],
             })
@@ -871,7 +935,9 @@ mod tests {
                 author: "alice".to_string(),
                 message: "first".to_string(),
                 assets: vec![AssetDelta {
+                    asset_id: None,
                     path: "env/config.json".to_string(),
+                    from_blob_hash: None,
                     blob_hash: Some("blob-v1".to_string()),
                 }],
             })
