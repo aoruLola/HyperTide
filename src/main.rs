@@ -6,7 +6,7 @@ mod core;
 use axum::{
     extract::{FromRef, State},
     http::StatusCode,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Router,
 };
 use sqlx::PgPool;
@@ -18,6 +18,7 @@ use crate::api::auth::{
     exchange_key, generate_key, list_keys, refresh_token, revoke_key, revoke_refresh_token,
     verify_key,
 };
+use crate::api::blobs::{missing_chunks, upload_chunk};
 use crate::api::lock::{force_unlock_file, list_locks, lock_file, unlock_file};
 use crate::api::storage::{calculate_hash, check_exists, download_file, upload_file};
 use crate::api::versioning::{
@@ -93,6 +94,8 @@ fn build_app(state: AppState) -> Router {
         .route("/v2/storage/download/:hash", get(download_file))
         .route("/v2/storage/exists/:hash", get(check_exists))
         .route("/v2/storage/hash", post(calculate_hash))
+        .route("/v2/blobs/missing", post(missing_chunks))
+        .route("/v2/blobs/chunks/:chunk_hash", put(upload_chunk))
         .route("/v2/auth/verify", get(verify_key))
         .route("/v2/auth/generate", post(generate_key))
         .route("/v2/auth/revoke", delete(revoke_key))

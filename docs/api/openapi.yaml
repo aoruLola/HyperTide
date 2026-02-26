@@ -134,6 +134,27 @@ paths:
         - BearerAuth: []
       responses:
         '200': { description: Hashed }
+  /v2/blobs/missing:
+    post:
+      summary: Query missing chunk hashes
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Missing chunk list }
+  /v2/blobs/chunks/{chunk_hash}:
+    put:
+      summary: Upload chunk by hash (idempotent)
+      parameters:
+        - in: path
+          name: chunk_hash
+          required: true
+          schema: { type: string }
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Uploaded or already exists }
   /v2/branches:
     post:
       summary: Create branch
