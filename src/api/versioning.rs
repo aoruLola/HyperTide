@@ -1,4 +1,4 @@
-use axum::{
+﻿use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
@@ -6,7 +6,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::api::common::ApiResponse;
-use crate::core::auth::{ApiKey, Permission};
+use crate::api::middleware::authz;
+use crate::core::auth::{AuthIdentity, Permission};
 use crate::core::versioning::{
     AssetDelta, BranchRecord, ChangesetKind, ChangesetRecord, HistoryPage, SnapshotEntry,
     SubmitChangesetInput, SyncSnapshot, VersioningError, ROOT_BASE_CHANGESET_ID,
@@ -81,23 +82,12 @@ pub struct SyncResponse {
     pub assets: Vec<SnapshotEntry>,
 }
 
-fn require_key(
+async fn require_key(
     state: &AppState,
     headers: &HeaderMap,
     permission: Permission,
-) -> Result<ApiKey, (StatusCode, String)> {
-    let key = headers
-        .get("X-API-Key")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    let api_key = match state.auth_manager.validate_key(key) {
-        Some(k) => k,
-        None => return Err((StatusCode::UNAUTHORIZED, "Invalid API key".to_string())),
-    };
-    if !api_key.has_permission(permission) {
-        return Err((StatusCode::FORBIDDEN, "Permission denied".to_string()));
-    }
-    Ok(api_key)
+) -> Result<AuthIdentity, (StatusCode, String)> {
+    authz::require_permission(state, headers, permission).await
 }
 
 fn parse_kind(value: Option<&str>) -> Result<ChangesetKind, String> {
@@ -186,13 +176,13 @@ async fn ensure_blob_exists(
     Ok(())
 }
 
-/// POST /v1/branches
+/// POST /v2/branches
 pub async fn create_branch(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<CreateBranchRequest>,
 ) -> (StatusCode, Json<ApiResponse<BranchRecord>>) {
-    let api_key = match require_key(&state, &headers, Permission::Upload) {
+    let identity = match require_key(&state, &headers, Permission::Upload).await {
         Ok(key) => key,
         Err((status, message)) => return (status, Json(ApiResponse::err(message))),
     };
@@ -201,7 +191,7 @@ pub async fn create_branch(
         &payload.repo_id,
         &payload.branch,
         payload.from_changeset_id.as_deref(),
-        &api_key.owner_id,
+        &identity.owner_id,
     ) {
         Ok(branch) => (StatusCode::CREATED, Json(ApiResponse::ok(branch))),
         Err(error) => {
@@ -211,13 +201,13 @@ pub async fn create_branch(
     }
 }
 
-/// GET /v1/branches/{repo_id}
+/// GET /v2/branches/{repo_id}
 pub async fn list_branches(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(repo_id): Path<String>,
 ) -> (StatusCode, Json<ApiResponse<BranchListResponse>>) {
-    if let Err((status, message)) = require_key(&state, &headers, Permission::Download) {
+    if let Err((status, message)) = require_key(&state, &headers, Permission::Download).await {
         return (status, Json(ApiResponse::err(message)));
     }
 
@@ -233,13 +223,13 @@ pub async fn list_branches(
     }
 }
 
-/// POST /v1/changesets
+/// POST /v2/changesets
 pub async fn submit_changeset(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<SubmitChangesetRequest>,
 ) -> (StatusCode, Json<ApiResponse<ChangesetRecord>>) {
-    let api_key = match require_key(&state, &headers, Permission::Upload) {
+    let identity = match require_key(&state, &headers, Permission::Upload).await {
         Ok(key) => key,
         Err((status, message)) => return (status, Json(ApiResponse::err(message))),
     };
@@ -249,14 +239,14 @@ pub async fn submit_changeset(
         Err(message) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::err(message))),
     };
 
-    if payload.author != api_key.owner_id {
+    if payload.author != identity.owner_id {
         return (
             StatusCode::FORBIDDEN,
             Json(ApiResponse::err("author must match API key owner")),
         );
     }
 
-    if let Err(err) = ensure_lock_access(&state, &api_key.owner_id, &payload.assets) {
+    if let Err(err) = ensure_lock_access(&state, &identity.owner_id, &payload.assets) {
         return (err.0, Json(ApiResponse::err(err.1)));
     }
     if let Err(err) = ensure_blob_exists(&state, &payload.assets).await {
@@ -283,14 +273,14 @@ pub async fn submit_changeset(
     }
 }
 
-/// GET /v1/history/{repo_id}?branch=...&limit=...&cursor=...
+/// GET /v2/history/{repo_id}?branch=...&limit=...&cursor=...
 pub async fn list_history(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(repo_id): Path<String>,
     Query(query): Query<HistoryQuery>,
 ) -> (StatusCode, Json<ApiResponse<HistoryPage>>) {
-    if let Err((status, message)) = require_key(&state, &headers, Permission::Download) {
+    if let Err((status, message)) = require_key(&state, &headers, Permission::Download).await {
         return (status, Json(ApiResponse::err(message)));
     }
 
@@ -309,17 +299,17 @@ pub async fn list_history(
     }
 }
 
-/// POST /v1/rollback
+/// POST /v2/rollback
 pub async fn rollback(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<RollbackRequest>,
 ) -> (StatusCode, Json<ApiResponse<RollbackResponse>>) {
-    let api_key = match require_key(&state, &headers, Permission::Upload) {
+    let identity = match require_key(&state, &headers, Permission::Upload).await {
         Ok(key) => key,
         Err((status, message)) => return (status, Json(ApiResponse::err(message))),
     };
-    if payload.author != api_key.owner_id {
+    if payload.author != identity.owner_id {
         return (
             StatusCode::FORBIDDEN,
             Json(ApiResponse::err("author must match API key owner")),
@@ -338,7 +328,7 @@ pub async fn rollback(
         }
     };
 
-    if let Err(err) = ensure_lock_access(&state, &api_key.owner_id, &plan.assets) {
+    if let Err(err) = ensure_lock_access(&state, &identity.owner_id, &plan.assets) {
         return (err.0, Json(ApiResponse::err(err.1)));
     }
     if let Err(err) = ensure_blob_exists(&state, &plan.assets).await {
@@ -378,14 +368,14 @@ pub async fn rollback(
     }
 }
 
-/// GET /v1/sync/{repo_id}?branch=...&to_changeset_id=...
+/// GET /v2/sync/{repo_id}?branch=...&to_changeset_id=...
 pub async fn sync_snapshot(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(repo_id): Path<String>,
     Query(query): Query<SyncQuery>,
 ) -> (StatusCode, Json<ApiResponse<SyncResponse>>) {
-    if let Err((status, message)) = require_key(&state, &headers, Permission::Download) {
+    if let Err((status, message)) = require_key(&state, &headers, Permission::Download).await {
         return (status, Json(ApiResponse::err(message)));
     }
 

@@ -1,44 +1,61 @@
-//! Authentication Manager
-//! Handles API key validation and permission checking
+﻿//! Authentication Manager
+//! Handles API key/JWT validation and permission checking.
 
-use chrono::{DateTime, Utc};
+pub mod repo;
+pub mod token;
+
+use std::sync::Arc;
+
+use anyhow::{anyhow, Context};
+use chrono::{DateTime, Duration, Utc};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use sqlx::PgPool;
 use uuid::Uuid;
 
-/// 权限级别
+use self::repo::AuthRepo;
+use self::token::{TokenPair, TokenService};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Permission {
-    /// 锁定/解锁文件
     Lock,
-    /// 上传文件
     Upload,
-    /// 下载文件
     Download,
-    /// 管理员权限 (强制解锁、生成/撤销 Key)
     Admin,
 }
 
-/// API Key 信息
+impl Permission {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Permission::Lock => "lock",
+            Permission::Upload => "upload",
+            Permission::Download => "download",
+            Permission::Admin => "admin",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "lock" => Some(Permission::Lock),
+            "upload" => Some(Permission::Upload),
+            "download" => Some(Permission::Download),
+            "admin" => Some(Permission::Admin),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKey {
-    /// Key 值 (用于认证)
     pub key: String,
-    /// 所有者 ID
     pub owner_id: String,
-    /// 权限列表
     pub permissions: Vec<Permission>,
-    /// 创建时间
     pub created_at: DateTime<Utc>,
-    /// 过期时间 (None 表示永不过期)
     pub expires_at: Option<DateTime<Utc>>,
-    /// 是否已撤销
     pub revoked: bool,
 }
 
 impl ApiKey {
-    /// 检查 Key 是否有效 (未过期且未撤销)
     pub fn is_valid(&self) -> bool {
         if self.revoked {
             return false;
@@ -49,9 +66,7 @@ impl ApiKey {
         true
     }
 
-    /// 检查是否拥有指定权限
     pub fn has_permission(&self, perm: Permission) -> bool {
-        // Admin 拥有所有权限
         if self.permissions.contains(&Permission::Admin) {
             return true;
         }
@@ -59,33 +74,62 @@ impl ApiKey {
     }
 }
 
-/// 认证管理器
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthSource {
+    ApiKey,
+    Bearer,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthIdentity {
+    pub owner_id: String,
+    pub permissions: Vec<Permission>,
+    pub source: AuthSource,
+}
+
+impl AuthIdentity {
+    pub fn has_permission(&self, perm: Permission) -> bool {
+        if self.permissions.contains(&Permission::Admin) {
+            return true;
+        }
+        self.permissions.contains(&perm)
+    }
+}
+
 #[derive(Clone)]
 pub struct AuthManager {
-    /// Key -> ApiKey 映射
     keys: Arc<DashMap<String, ApiKey>>,
-    /// 开发模式 Master Key (仅用于开发)
     dev_master_key: Option<String>,
+    repo: Option<AuthRepo>,
+    token_service: Option<TokenService>,
+    access_token_ttl_secs: i64,
+    refresh_token_ttl_secs: i64,
 }
 
 impl AuthManager {
-    /// 创建新的认证管理器
     pub fn new() -> Self {
         Self {
             keys: Arc::new(DashMap::new()),
             dev_master_key: None,
+            repo: None,
+            token_service: None,
+            access_token_ttl_secs: 15 * 60,
+            refresh_token_ttl_secs: 7 * 24 * 60 * 60,
         }
     }
 
-    /// 创建带开发 Master Key 的认证管理器
     pub fn with_dev_key(master_key: impl Into<String>) -> Self {
         let master_key = master_key.into();
         let manager = Self {
             keys: Arc::new(DashMap::new()),
             dev_master_key: Some(master_key.clone()),
+            repo: None,
+            token_service: None,
+            access_token_ttl_secs: 15 * 60,
+            refresh_token_ttl_secs: 7 * 24 * 60 * 60,
         };
 
-        // 注册开发 Master Key (拥有所有权限)
         let dev_api_key = ApiKey {
             key: master_key,
             owner_id: "dev-admin".to_string(),
@@ -104,7 +148,45 @@ impl AuthManager {
         manager
     }
 
-    /// 验证 API Key，返回 Key 信息 (如果有效)
+    pub async fn with_dev_key_and_db(
+        master_key: impl Into<String>,
+        db_pool: PgPool,
+    ) -> anyhow::Result<Self> {
+        let mut manager = Self::with_dev_key(master_key);
+        let pepper = std::env::var("AUTH_PEPPER").unwrap_or_else(|_| "hypertide-dev-pepper".into());
+        let repo = AuthRepo::new(db_pool, pepper);
+        let token_service =
+            TokenService::from_env().map_err(|error| anyhow!("JWT service initialization failed: {error}"))?;
+        manager.access_token_ttl_secs = std::env::var("ACCESS_TOKEN_TTL_SECS")
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(15 * 60);
+        manager.refresh_token_ttl_secs = std::env::var("REFRESH_TOKEN_TTL_SECS")
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(7 * 24 * 60 * 60);
+
+        if let Some(master) = manager.dev_master_key.clone() {
+            repo.upsert_api_key(
+                &master,
+                "dev-admin",
+                &[
+                    Permission::Lock,
+                    Permission::Upload,
+                    Permission::Download,
+                    Permission::Admin,
+                ],
+                None,
+            )
+            .await
+            .context("failed to persist dev master key")?;
+        }
+
+        manager.repo = Some(repo);
+        manager.token_service = Some(token_service);
+        Ok(manager)
+    }
+
     pub fn validate_key(&self, key: &str) -> Option<ApiKey> {
         self.keys.get(key).and_then(|api_key| {
             if api_key.is_valid() {
@@ -115,21 +197,19 @@ impl AuthManager {
         })
     }
 
-    /// 检查 Key 是否拥有指定权限
     pub fn has_permission(&self, key: &str, perm: Permission) -> bool {
         self.validate_key(key)
             .map(|api_key| api_key.has_permission(perm))
             .unwrap_or(false)
     }
 
-    /// 生成新的 API Key
     pub fn generate_key(
         &self,
         owner_id: &str,
         permissions: Vec<Permission>,
         expires_in_days: Option<i64>,
     ) -> ApiKey {
-        let key = format!("ht_{}", Uuid::new_v4().to_string().replace("-", ""));
+        let key = format!("ht_{}", Uuid::new_v4().to_string().replace('-', ""));
         let expires_at = expires_in_days.map(|days| Utc::now() + chrono::Duration::days(days));
 
         let api_key = ApiKey {
@@ -145,7 +225,6 @@ impl AuthManager {
         api_key
     }
 
-    /// 撤销 API Key
     pub fn revoke_key(&self, key: &str) -> bool {
         if let Some(mut api_key) = self.keys.get_mut(key) {
             api_key.revoked = true;
@@ -155,12 +234,247 @@ impl AuthManager {
         }
     }
 
-    /// 列出所有 API Keys (管理员功能)
     pub fn list_keys(&self) -> Vec<ApiKey> {
         self.keys.iter().map(|kv| kv.value().clone()).collect()
     }
 
-    /// 检查是否为开发 Master Key
+    pub async fn validate_key_any(&self, key: &str) -> Option<ApiKey> {
+        if let Some(in_memory) = self.validate_key(key) {
+            return Some(in_memory);
+        }
+
+        let repo = self.repo.as_ref()?;
+        let stored = match repo.find_api_key(key).await {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::error!("api key lookup failed: {error}");
+                return None;
+            }
+        }?;
+
+        let api_key = ApiKey {
+            key: key.to_string(),
+            owner_id: stored.owner_id,
+            permissions: stored.permissions,
+            created_at: stored.created_at,
+            expires_at: stored.expires_at,
+            revoked: stored.revoked,
+        };
+        if api_key.is_valid() {
+            Some(api_key)
+        } else {
+            None
+        }
+    }
+
+    pub async fn validate_api_key_identity(&self, key: &str) -> Result<AuthIdentity, String> {
+        let api_key = self
+            .validate_key_any(key)
+            .await
+            .ok_or_else(|| "Invalid API key".to_string())?;
+        Ok(AuthIdentity {
+            owner_id: api_key.owner_id,
+            permissions: api_key.permissions,
+            source: AuthSource::ApiKey,
+        })
+    }
+
+    pub async fn validate_access_token(&self, token: &str) -> Result<AuthIdentity, String> {
+        let token_service = self
+            .token_service
+            .as_ref()
+            .ok_or_else(|| "JWT service not configured".to_string())?;
+        let claims = token_service.decode_access_token(token)?;
+        let permissions = claims
+            .permissions
+            .iter()
+            .filter_map(|value| Permission::from_str(value))
+            .collect::<Vec<_>>();
+
+        Ok(AuthIdentity {
+            owner_id: claims.sub,
+            permissions,
+            source: AuthSource::Bearer,
+        })
+    }
+
+    pub async fn generate_key_persistent(
+        &self,
+        owner_id: &str,
+        permissions: Vec<Permission>,
+        expires_in_days: Option<i64>,
+    ) -> Result<ApiKey, String> {
+        let api_key = self.generate_key(owner_id, permissions.clone(), expires_in_days);
+        if let Some(repo) = &self.repo {
+            repo.upsert_api_key(&api_key.key, owner_id, &permissions, api_key.expires_at)
+                .await
+                .map_err(|error| format!("failed to persist api key: {error}"))?;
+        }
+        Ok(api_key)
+    }
+
+    pub async fn revoke_key_persistent(&self, key: &str) -> Result<bool, String> {
+        let in_memory_revoked = self.revoke_key(key);
+        let db_revoked = if let Some(repo) = &self.repo {
+            repo.revoke_api_key(key)
+                .await
+                .map_err(|error| format!("failed to revoke api key: {error}"))?
+        } else {
+            false
+        };
+        Ok(in_memory_revoked || db_revoked)
+    }
+
+    pub async fn list_keys_persistent(&self) -> Result<Vec<ApiKey>, String> {
+        let mut keys = self.list_keys();
+        if let Some(repo) = &self.repo {
+            let stored = repo
+                .list_api_keys()
+                .await
+                .map_err(|error| format!("failed to list api keys: {error}"))?;
+            for (key_hash, row) in stored {
+                keys.push(ApiKey {
+                    key: key_hash,
+                    owner_id: row.owner_id,
+                    permissions: row.permissions,
+                    created_at: row.created_at,
+                    expires_at: row.expires_at,
+                    revoked: row.revoked,
+                });
+            }
+        }
+        Ok(keys)
+    }
+
+    pub async fn exchange_key_for_tokens(&self, api_key: &str) -> Result<TokenPair, String> {
+        let key = self
+            .validate_key_any(api_key)
+            .await
+            .ok_or_else(|| "Invalid API key".to_string())?;
+        let token_service = self
+            .token_service
+            .as_ref()
+            .ok_or_else(|| "JWT service not configured".to_string())?;
+        let repo = self
+            .repo
+            .as_ref()
+            .ok_or_else(|| "Auth repository not configured".to_string())?;
+
+        let permissions = key
+            .permissions
+            .iter()
+            .map(|permission| permission.as_str().to_string())
+            .collect::<Vec<_>>();
+        let family_id = Uuid::new_v4().to_string();
+
+        let access_token = token_service.issue_access_token(
+            &key.owner_id,
+            permissions.clone(),
+            self.access_token_ttl_secs,
+        )?;
+        let refresh_token = token_service.issue_refresh_token(
+            &key.owner_id,
+            permissions,
+            self.refresh_token_ttl_secs,
+            family_id.clone(),
+            None,
+        )?;
+
+        repo.insert_refresh_token(
+            &refresh_token,
+            &key.owner_id,
+            &family_id,
+            None,
+            Utc::now() + Duration::seconds(self.refresh_token_ttl_secs),
+        )
+        .await
+        .map_err(|error| format!("failed to persist refresh token: {error}"))?;
+
+        Ok(TokenPair {
+            access_token,
+            refresh_token,
+            token_type: "Bearer".to_string(),
+            expires_in: self.access_token_ttl_secs,
+        })
+    }
+
+    pub async fn refresh_tokens(&self, refresh_token: &str) -> Result<TokenPair, String> {
+        let token_service = self
+            .token_service
+            .as_ref()
+            .ok_or_else(|| "JWT service not configured".to_string())?;
+        let repo = self
+            .repo
+            .as_ref()
+            .ok_or_else(|| "Auth repository not configured".to_string())?;
+
+        let claims = token_service.decode_refresh_token(refresh_token)?;
+        let stored = repo
+            .find_refresh_token(refresh_token)
+            .await
+            .map_err(|error| format!("refresh lookup failed: {error}"))?
+            .ok_or_else(|| "Refresh token not found".to_string())?;
+
+        if stored.revoked_at.is_some() {
+            return Err("Refresh token revoked".to_string());
+        }
+        if stored.replaced_by_token_hash.is_some() {
+            let _ = repo.revoke_refresh_family(&stored.family_id).await;
+            return Err("Refresh token replay detected; family revoked".to_string());
+        }
+        if stored.expires_at <= Utc::now() {
+            let _ = repo.revoke_refresh_token(refresh_token).await;
+            return Err("Refresh token expired".to_string());
+        }
+
+        let family_id = claims
+            .family_id
+            .clone()
+            .unwrap_or_else(|| stored.family_id.clone());
+        let access_token = token_service.issue_access_token(
+            &claims.sub,
+            claims.permissions.clone(),
+            self.access_token_ttl_secs,
+        )?;
+        let new_refresh_token = token_service.issue_refresh_token(
+            &claims.sub,
+            claims.permissions,
+            self.refresh_token_ttl_secs,
+            family_id.clone(),
+            Some(claims.jti),
+        )?;
+
+        repo.insert_refresh_token(
+            &new_refresh_token,
+            &claims.sub,
+            &family_id,
+            Some(refresh_token),
+            Utc::now() + Duration::seconds(self.refresh_token_ttl_secs),
+        )
+        .await
+        .map_err(|error| format!("failed to persist rotated refresh token: {error}"))?;
+        repo.mark_refresh_replaced(refresh_token, &new_refresh_token)
+            .await
+            .map_err(|error| format!("failed to mark refresh rotation: {error}"))?;
+
+        Ok(TokenPair {
+            access_token,
+            refresh_token: new_refresh_token,
+            token_type: "Bearer".to_string(),
+            expires_in: self.access_token_ttl_secs,
+        })
+    }
+
+    pub async fn revoke_refresh_token(&self, refresh_token: &str) -> Result<bool, String> {
+        let repo = self
+            .repo
+            .as_ref()
+            .ok_or_else(|| "Auth repository not configured".to_string())?;
+        repo.revoke_refresh_token(refresh_token)
+            .await
+            .map_err(|error| format!("failed to revoke refresh token: {error}"))
+    }
+
     pub fn is_dev_master_key(&self, key: &str) -> bool {
         self.dev_master_key
             .as_ref()
@@ -183,10 +497,7 @@ mod tests {
     fn test_dev_master_key() {
         let manager = AuthManager::with_dev_key("test-master-key");
 
-        // Master Key 应该有效
         assert!(manager.validate_key("test-master-key").is_some());
-
-        // Master Key 应该拥有所有权限
         assert!(manager.has_permission("test-master-key", Permission::Admin));
         assert!(manager.has_permission("test-master-key", Permission::Lock));
         assert!(manager.has_permission("test-master-key", Permission::Upload));
@@ -199,10 +510,7 @@ mod tests {
         let api_key =
             manager.generate_key("alice", vec![Permission::Lock, Permission::Download], None);
 
-        // 新生成的 Key 应该有效
         assert!(manager.validate_key(&api_key.key).is_some());
-
-        // 权限检查
         assert!(manager.has_permission(&api_key.key, Permission::Lock));
         assert!(manager.has_permission(&api_key.key, Permission::Download));
         assert!(!manager.has_permission(&api_key.key, Permission::Admin));
@@ -215,10 +523,7 @@ mod tests {
         let api_key = manager.generate_key("bob", vec![Permission::Upload], None);
         assert!(manager.validate_key(&api_key.key).is_some());
 
-        // 撤销 Key
         assert!(manager.revoke_key(&api_key.key));
-
-        // 撤销后应该无效
         assert!(manager.validate_key(&api_key.key).is_none());
     }
 
@@ -226,7 +531,6 @@ mod tests {
     fn test_invalid_key() {
         let manager = AuthManager::new();
 
-        // 不存在的 Key 应该返回 None
         assert!(manager.validate_key("invalid-key").is_none());
         assert!(!manager.has_permission("invalid-key", Permission::Lock));
     }

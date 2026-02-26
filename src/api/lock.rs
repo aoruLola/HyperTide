@@ -1,9 +1,16 @@
-//! Lock API Handlers
+﻿//! Lock API Handlers
 //! HTTP endpoints for file locking operations
 
 use crate::api::common::ApiResponse;
-use crate::core::lock::{FileLock, LockManager};
-use axum::{extract::State, http::StatusCode, Json};
+use crate::api::middleware::authz;
+use crate::core::auth::Permission;
+use crate::core::lock::FileLock;
+use crate::AppState;
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    Json,
+};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -23,50 +30,93 @@ pub struct ForceUnlockRequest {
     pub file_path: String,
 }
 
-/// POST /api/lock
+async fn require_permission(
+    state: &AppState,
+    headers: &HeaderMap,
+    permission: Permission,
+) -> Result<(), (StatusCode, String)> {
+    authz::require_permission(state, headers, permission)
+        .await
+        .map(|_| ())?;
+    Ok(())
+}
+
+/// POST /v2/locks/acquire
 /// Request a lock on a file
 pub async fn lock_file(
-    State(manager): State<LockManager>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<LockRequest>,
 ) -> (StatusCode, Json<ApiResponse<FileLock>>) {
-    match manager.try_lock(payload.file_path, payload.owner_id) {
+    if let Err((status, message)) = require_permission(&state, &headers, Permission::Lock).await {
+        return (status, Json(ApiResponse::err(message)));
+    }
+
+    match state
+        .lock_manager
+        .try_lock(payload.file_path, payload.owner_id)
+        .await
+    {
         Ok(lock) => (StatusCode::OK, Json(ApiResponse::ok(lock))),
         Err(e) => (StatusCode::CONFLICT, Json(ApiResponse::err(e))),
     }
 }
 
-/// DELETE /api/unlock
+/// DELETE /v2/locks/release
 /// Release a lock (only owner can unlock)
 pub async fn unlock_file(
-    State(manager): State<LockManager>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<UnlockRequest>,
 ) -> (StatusCode, Json<ApiResponse<()>>) {
-    match manager.unlock(&payload.file_path, &payload.owner_id) {
+    if let Err((status, message)) = require_permission(&state, &headers, Permission::Lock).await {
+        return (status, Json(ApiResponse::err(message)));
+    }
+
+    match state
+        .lock_manager
+        .unlock(&payload.file_path, &payload.owner_id)
+        .await
+    {
         Ok(_) => (StatusCode::OK, Json(ApiResponse::ok(()))),
         Err(e) => (StatusCode::FORBIDDEN, Json(ApiResponse::err(e))),
     }
 }
 
-/// POST /api/break-lock
+/// POST /v2/locks/force-release
 /// Admin force unlock (bypasses ownership check)
 pub async fn force_unlock_file(
-    State(manager): State<LockManager>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<ForceUnlockRequest>,
 ) -> (StatusCode, Json<ApiResponse<bool>>) {
-    let removed = manager.force_unlock(&payload.file_path);
-    if removed {
-        (StatusCode::OK, Json(ApiResponse::ok(true)))
-    } else {
-        (
+    if let Err((status, message)) = require_permission(&state, &headers, Permission::Admin).await {
+        return (status, Json(ApiResponse::err(message)));
+    }
+
+    match state.lock_manager.force_unlock(&payload.file_path).await {
+        Ok(true) => (StatusCode::OK, Json(ApiResponse::ok(true))),
+        Ok(false) => (
             StatusCode::NOT_FOUND,
             Json(ApiResponse::err("File was not locked")),
-        )
+        ),
+        Err(message) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::err(message)),
+        ),
     }
 }
 
-/// GET /api/locks
+/// GET /v2/locks/acquires
 /// List all current locks
-pub async fn list_locks(State(manager): State<LockManager>) -> Json<ApiResponse<Vec<FileLock>>> {
-    let locks = manager.list_locks();
-    Json(ApiResponse::ok(locks))
+pub async fn list_locks(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<ApiResponse<Vec<FileLock>>>) {
+    if let Err((status, message)) = require_permission(&state, &headers, Permission::Lock).await {
+        return (status, Json(ApiResponse::err(message)));
+    }
+
+    let locks = state.lock_manager.list_locks();
+    (StatusCode::OK, Json(ApiResponse::ok(locks)))
 }

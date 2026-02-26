@@ -1,13 +1,10 @@
-//! Authentication API Handlers
-//! HTTP endpoints for API key management and authentication
+﻿//! Authentication API handlers
 
 use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::api::common::ApiResponse;
-use crate::core::auth::{AuthManager, Permission};
-
-// ==================== Request/Response DTOs ====================
+use crate::core::auth::{token::TokenPair, AuthManager, Permission};
 
 #[derive(Debug, Serialize)]
 pub struct VerifyResponse {
@@ -36,32 +33,65 @@ pub struct RevokeKeyRequest {
     pub key: String,
 }
 
-// ==================== Helper Functions ====================
-
-fn parse_permission(s: &str) -> Option<Permission> {
-    match s.to_lowercase().as_str() {
-        "lock" => Some(Permission::Lock),
-        "upload" => Some(Permission::Upload),
-        "download" => Some(Permission::Download),
-        "admin" => Some(Permission::Admin),
-        _ => None,
-    }
+#[derive(Debug, Serialize)]
+pub struct KeyListItem {
+    pub key_prefix: String,
+    pub owner_id: String,
+    pub permissions: Vec<String>,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+    pub revoked: bool,
 }
 
-fn permission_to_string(p: &Permission) -> String {
-    match p {
-        Permission::Lock => "lock".to_string(),
-        Permission::Upload => "upload".to_string(),
-        Permission::Download => "download".to_string(),
-        Permission::Admin => "admin".to_string(),
-    }
+#[derive(Debug, Deserialize)]
+pub struct ExchangeKeyRequest {
+    pub api_key: String,
 }
 
-// ==================== API Handlers ====================
+#[derive(Debug, Deserialize)]
+pub struct RefreshRequest {
+    pub refresh_token: String,
+}
 
-/// GET /api/auth/verify
-/// 验证当前请求的 API Key 是否有效
-/// API Key 从 X-API-Key header 获取 (由中间件注入)
+#[derive(Debug, Deserialize)]
+pub struct RevokeRefreshRequest {
+    pub refresh_token: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RevokeRefreshResponse {
+    pub revoked: bool,
+}
+
+fn parse_permission(value: &str) -> Option<Permission> {
+    Permission::from_str(value)
+}
+
+fn permission_to_string(permission: &Permission) -> String {
+    permission.as_str().to_string()
+}
+
+async fn require_admin_api_key(
+    manager: &AuthManager,
+    headers: &axum::http::HeaderMap,
+) -> Result<String, (StatusCode, String)> {
+    let caller_key = headers
+        .get("X-API-Key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+
+    let identity = manager
+        .validate_api_key_identity(caller_key)
+        .await
+        .map_err(|_| (StatusCode::UNAUTHORIZED, "Invalid API key".to_string()))?;
+
+    if !identity.has_permission(Permission::Admin) {
+        return Err((StatusCode::FORBIDDEN, "Admin permission required".to_string()));
+    }
+
+    Ok(caller_key.to_string())
+}
+
 pub async fn verify_key(
     State(manager): State<AuthManager>,
     headers: axum::http::HeaderMap,
@@ -71,7 +101,7 @@ pub async fn verify_key(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    match manager.validate_key(key) {
+    match manager.validate_key_any(key).await {
         Some(api_key) => Json(ApiResponse::ok(VerifyResponse {
             valid: true,
             owner_id: Some(api_key.owner_id),
@@ -89,27 +119,15 @@ pub async fn verify_key(
     }
 }
 
-/// POST /api/auth/generate
-/// 生成新的 API Key (需要 Admin 权限)
 pub async fn generate_key(
     State(manager): State<AuthManager>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<GenerateKeyRequest>,
 ) -> (StatusCode, Json<ApiResponse<GenerateKeyResponse>>) {
-    // 验证调用者权限
-    let caller_key = headers
-        .get("X-API-Key")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if !manager.has_permission(caller_key, Permission::Admin) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(ApiResponse::err("Admin permission required")),
-        );
+    if let Err((status, message)) = require_admin_api_key(&manager, &headers).await {
+        return (status, Json(ApiResponse::err(message)));
     }
 
-    // 解析权限
     let permissions: Vec<Permission> = payload
         .permissions
         .iter()
@@ -123,45 +141,40 @@ pub async fn generate_key(
         );
     }
 
-    // 生成 Key
-    let api_key = manager.generate_key(&payload.owner_id, permissions, payload.expires_in_days);
-
-    (
-        StatusCode::CREATED,
-        Json(ApiResponse::ok(GenerateKeyResponse {
-            key: api_key.key,
-            owner_id: api_key.owner_id,
-            permissions: api_key
-                .permissions
-                .iter()
-                .map(permission_to_string)
-                .collect(),
-            expires_at: api_key.expires_at.map(|dt| dt.to_rfc3339()),
-        })),
-    )
+    match manager
+        .generate_key_persistent(&payload.owner_id, permissions, payload.expires_in_days)
+        .await
+    {
+        Ok(api_key) => (
+            StatusCode::CREATED,
+            Json(ApiResponse::ok(GenerateKeyResponse {
+                key: api_key.key,
+                owner_id: api_key.owner_id,
+                permissions: api_key
+                    .permissions
+                    .iter()
+                    .map(permission_to_string)
+                    .collect(),
+                expires_at: api_key.expires_at.map(|dt| dt.to_rfc3339()),
+            })),
+        ),
+        Err(message) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::err(message)),
+        ),
+    }
 }
 
-/// DELETE /api/auth/revoke
-/// 撤销 API Key (需要 Admin 权限)
 pub async fn revoke_key(
     State(manager): State<AuthManager>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<RevokeKeyRequest>,
 ) -> (StatusCode, Json<ApiResponse<bool>>) {
-    // 验证调用者权限
-    let caller_key = headers
-        .get("X-API-Key")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+    let caller_key = match require_admin_api_key(&manager, &headers).await {
+        Ok(value) => value,
+        Err((status, message)) => return (status, Json(ApiResponse::err(message))),
+    };
 
-    if !manager.has_permission(caller_key, Permission::Admin) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(ApiResponse::err("Admin permission required")),
-        );
-    }
-
-    // 防止撤销自己
     if caller_key == payload.key {
         return (
             StatusCode::BAD_REQUEST,
@@ -169,60 +182,78 @@ pub async fn revoke_key(
         );
     }
 
-    // 撤销 Key
-    let revoked = manager.revoke_key(&payload.key);
-    if revoked {
-        (StatusCode::OK, Json(ApiResponse::ok(true)))
-    } else {
-        (
+    match manager.revoke_key_persistent(&payload.key).await {
+        Ok(true) => (StatusCode::OK, Json(ApiResponse::ok(true))),
+        Ok(false) => (
             StatusCode::NOT_FOUND,
             Json(ApiResponse::err("Key not found")),
-        )
+        ),
+        Err(message) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::err(message)),
+        ),
     }
-}
-
-/// GET /api/auth/keys
-/// 列出所有 API Keys (需要 Admin 权限，隐藏完整 Key)
-#[derive(Debug, Serialize)]
-pub struct KeyListItem {
-    pub key_prefix: String, // 只显示前缀
-    pub owner_id: String,
-    pub permissions: Vec<String>,
-    pub created_at: String,
-    pub expires_at: Option<String>,
-    pub revoked: bool,
 }
 
 pub async fn list_keys(
     State(manager): State<AuthManager>,
     headers: axum::http::HeaderMap,
 ) -> (StatusCode, Json<ApiResponse<Vec<KeyListItem>>>) {
-    // 验证调用者权限
-    let caller_key = headers
-        .get("X-API-Key")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if !manager.has_permission(caller_key, Permission::Admin) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(ApiResponse::err("Admin permission required")),
-        );
+    if let Err((status, message)) = require_admin_api_key(&manager, &headers).await {
+        return (status, Json(ApiResponse::err(message)));
     }
 
-    let keys: Vec<KeyListItem> = manager
-        .list_keys()
-        .into_iter()
-        .map(|k| KeyListItem {
-            // 只显示 Key 前 12 个字符
-            key_prefix: format!("{}...", &k.key[..k.key.len().min(12)]),
-            owner_id: k.owner_id,
-            permissions: k.permissions.iter().map(permission_to_string).collect(),
-            created_at: k.created_at.to_rfc3339(),
-            expires_at: k.expires_at.map(|dt| dt.to_rfc3339()),
-            revoked: k.revoked,
-        })
-        .collect();
+    match manager.list_keys_persistent().await {
+        Ok(keys) => {
+            let items = keys
+                .into_iter()
+                .map(|key| KeyListItem {
+                    key_prefix: format!("{}...", &key.key[..key.key.len().min(12)]),
+                    owner_id: key.owner_id,
+                    permissions: key.permissions.iter().map(permission_to_string).collect(),
+                    created_at: key.created_at.to_rfc3339(),
+                    expires_at: key.expires_at.map(|dt| dt.to_rfc3339()),
+                    revoked: key.revoked,
+                })
+                .collect::<Vec<_>>();
+            (StatusCode::OK, Json(ApiResponse::ok(items)))
+        }
+        Err(message) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::err(message)),
+        ),
+    }
+}
 
-    (StatusCode::OK, Json(ApiResponse::ok(keys)))
+pub async fn exchange_key(
+    State(manager): State<AuthManager>,
+    Json(payload): Json<ExchangeKeyRequest>,
+) -> (StatusCode, Json<ApiResponse<TokenPair>>) {
+    match manager.exchange_key_for_tokens(&payload.api_key).await {
+        Ok(tokens) => (StatusCode::OK, Json(ApiResponse::ok(tokens))),
+        Err(message) => (StatusCode::UNAUTHORIZED, Json(ApiResponse::err(message))),
+    }
+}
+
+pub async fn refresh_token(
+    State(manager): State<AuthManager>,
+    Json(payload): Json<RefreshRequest>,
+) -> (StatusCode, Json<ApiResponse<TokenPair>>) {
+    match manager.refresh_tokens(&payload.refresh_token).await {
+        Ok(tokens) => (StatusCode::OK, Json(ApiResponse::ok(tokens))),
+        Err(message) => (StatusCode::UNAUTHORIZED, Json(ApiResponse::err(message))),
+    }
+}
+
+pub async fn revoke_refresh_token(
+    State(manager): State<AuthManager>,
+    Json(payload): Json<RevokeRefreshRequest>,
+) -> (StatusCode, Json<ApiResponse<RevokeRefreshResponse>>) {
+    match manager.revoke_refresh_token(&payload.refresh_token).await {
+        Ok(revoked) => (
+            StatusCode::OK,
+            Json(ApiResponse::ok(RevokeRefreshResponse { revoked })),
+        ),
+        Err(message) => (StatusCode::BAD_REQUEST, Json(ApiResponse::err(message))),
+    }
 }

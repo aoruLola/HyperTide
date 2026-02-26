@@ -1,17 +1,20 @@
-//! Storage API Handlers
+﻿//! Storage API Handlers
 //! HTTP endpoints for file upload/download operations
 
 use axum::{
     body::Body,
     extract::{Multipart, Path, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::api::common::ApiResponse;
+use crate::api::middleware::authz;
+use crate::core::auth::Permission;
 use crate::core::storage::StorageManager;
+use crate::AppState;
 
 #[derive(Debug, Serialize)]
 pub struct UploadResponse {
@@ -20,12 +23,29 @@ pub struct UploadResponse {
     pub original_path: String,
 }
 
-/// POST /api/upload
+async fn require_permission(
+    state: &AppState,
+    headers: &HeaderMap,
+    permission: Permission,
+) -> Result<(), (StatusCode, String)> {
+    authz::require_permission(state, headers, permission)
+        .await
+        .map(|_| ())?;
+    Ok(())
+}
+
+/// POST /v2/storage/upload
 /// Upload a file via multipart form
 pub async fn upload_file(
-    State(manager): State<StorageManager>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> (StatusCode, Json<ApiResponse<UploadResponse>>) {
+    if let Err((status, message)) = require_permission(&state, &headers, Permission::Upload).await
+    {
+        return (status, Json(ApiResponse::err(message)));
+    }
+
     // Get the first file field
     let field = match multipart.next_field().await {
         Ok(Some(f)) => f,
@@ -55,7 +75,7 @@ pub async fn upload_file(
         }
     };
 
-    match manager.store(&data, &filename).await {
+    match state.storage_manager.store(&data, &filename).await {
         Ok(stored) => (
             StatusCode::OK,
             Json(ApiResponse::ok(UploadResponse {
@@ -68,13 +88,20 @@ pub async fn upload_file(
     }
 }
 
-/// GET /api/download/:hash
+/// GET /v2/storage/download/:hash
 /// Download a file by its hash
 pub async fn download_file(
-    State(manager): State<StorageManager>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
     Path(hash): Path<String>,
 ) -> Response {
-    match manager.retrieve(&hash).await {
+    if let Err((status, message)) =
+        require_permission(&state, &headers, Permission::Download).await
+    {
+        return (status, message).into_response();
+    }
+
+    match state.storage_manager.retrieve(&hash).await {
         Ok(data) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "application/octet-stream")
@@ -88,17 +115,24 @@ pub async fn download_file(
     }
 }
 
-/// GET /api/exists/:hash
+/// GET /v2/storage/exists/:hash
 /// Check if a file exists
 pub async fn check_exists(
-    State(manager): State<StorageManager>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
     Path(hash): Path<String>,
-) -> Json<ApiResponse<bool>> {
-    let exists = manager.exists(&hash).await;
-    Json(ApiResponse::ok(exists))
+) -> (StatusCode, Json<ApiResponse<bool>>) {
+    if let Err((status, message)) =
+        require_permission(&state, &headers, Permission::Download).await
+    {
+        return (status, Json(ApiResponse::err(message)));
+    }
+
+    let exists = state.storage_manager.exists(&hash).await;
+    (StatusCode::OK, Json(ApiResponse::ok(exists)))
 }
 
-/// GET /api/hash
+/// GET /v2/storage/hash
 /// Calculate hash of provided data (for client-side deduplication check)
 #[derive(Debug, Deserialize)]
 pub struct HashRequest {
@@ -110,14 +144,26 @@ pub struct HashResponse {
     pub hash: String,
 }
 
-pub async fn calculate_hash(Json(payload): Json<HashRequest>) -> Json<ApiResponse<HashResponse>> {
+pub async fn calculate_hash(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<HashRequest>,
+) -> (StatusCode, Json<ApiResponse<HashResponse>>) {
+    if let Err((status, message)) = require_permission(&state, &headers, Permission::Upload).await
+    {
+        return (status, Json(ApiResponse::err(message)));
+    }
+
     use base64::Engine;
 
     match base64::engine::general_purpose::STANDARD.decode(&payload.data) {
         Ok(data) => {
             let hash = StorageManager::calculate_hash(&data);
-            Json(ApiResponse::ok(HashResponse { hash }))
+            (StatusCode::OK, Json(ApiResponse::ok(HashResponse { hash })))
         }
-        Err(e) => Json(ApiResponse::err(format!("Invalid base64: {}", e))),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::err(format!("Invalid base64: {}", e))),
+        ),
     }
 }

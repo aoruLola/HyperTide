@@ -1,0 +1,231 @@
+﻿openapi: 3.0.3
+info:
+  title: HyperTide Backend API
+  version: 2.0.0-draft
+  description: HyperTide v2 API draft contract for M8 baseline freeze.
+servers:
+  - url: http://localhost:3000
+paths:
+  /health/live:
+    get:
+      summary: Process liveness
+      responses:
+        '200': { description: Live }
+  /health/ready:
+    get:
+      summary: Dependency readiness
+      responses:
+        '200': { description: Ready }
+        '503': { description: Not ready }
+  /v2/auth/verify:
+    get:
+      summary: Verify API key validity
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200': { description: Verified }
+  /v2/auth/generate:
+    post:
+      summary: Generate API key
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '201': { description: Created }
+  /v2/auth/revoke:
+    delete:
+      summary: Revoke API key
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200': { description: Revoked }
+  /v2/auth/keys:
+    get:
+      summary: List API keys
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200': { description: Listed }
+  /v2/auth/exchange-key:
+    post:
+      summary: Exchange API key for JWT tokens
+      responses:
+        '200': { description: Token pair issued }
+  /v2/auth/refresh:
+    post:
+      summary: Refresh access token
+      responses:
+        '200': { description: Refreshed }
+  /v2/auth/revoke-refresh:
+    post:
+      summary: Revoke refresh token
+      responses:
+        '200': { description: Revoked }
+  /v2/locks/acquire:
+    post:
+      summary: Acquire file lock
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Locked }
+  /v2/locks/release:
+    post:
+      summary: Release file lock
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Unlocked }
+  /v2/locks/force-release:
+    post:
+      summary: Force release lock
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Released }
+  /v2/locks:
+    get:
+      summary: List locks
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Listed }
+  /v2/storage/upload:
+    post:
+      summary: Upload blob
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Uploaded }
+  /v2/storage/download/{hash}:
+    get:
+      summary: Download blob
+      parameters:
+        - in: path
+          name: hash
+          required: true
+          schema: { type: string }
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Downloaded }
+  /v2/storage/exists/{hash}:
+    get:
+      summary: Check blob exists
+      parameters:
+        - in: path
+          name: hash
+          required: true
+          schema: { type: string }
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Exists result }
+  /v2/storage/hash:
+    post:
+      summary: Calculate hash
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Hashed }
+  /v2/branches:
+    post:
+      summary: Create branch
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '201': { description: Created }
+  /v2/branches/{repo_id}:
+    get:
+      summary: List branches
+      parameters:
+        - in: path
+          name: repo_id
+          required: true
+          schema: { type: string }
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Listed }
+  /v2/changesets:
+    post:
+      summary: Submit changeset
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '201': { description: Created }
+  /v2/history/{repo_id}:
+    get:
+      summary: List history
+      parameters:
+        - in: path
+          name: repo_id
+          required: true
+          schema: { type: string }
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Listed }
+  /v2/rollback:
+    post:
+      summary: Submit rollback changeset
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '201': { description: Created }
+  /v2/sync/{repo_id}:
+    get:
+      summary: Sync snapshot
+      parameters:
+        - in: path
+          name: repo_id
+          required: true
+          schema: { type: string }
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Synced }
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    SuccessEnvelope:
+      type: object
+      properties:
+        success: { type: boolean, enum: [true] }
+        data:
+          nullable: true
+        error:
+          nullable: true
+    ErrorEnvelope:
+      type: object
+      properties:
+        success: { type: boolean, enum: [false] }
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details:
+              nullable: true
+            request_id: { type: string }

@@ -1,10 +1,10 @@
-use std::fs;
+﻿use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use reqwest::header::{HeaderMap, HeaderValue};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 const ROOT_BASE_CHANGESET_ID: &str = "ROOT";
 
@@ -154,7 +154,16 @@ struct AssetDelta {
 struct ApiResponse<T> {
     success: bool,
     data: Option<T>,
-    error: Option<String>,
+    error: Option<ApiError>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ApiError {
+    code: String,
+    message: String,
+    #[serde(default)]
+    details: Option<serde_json::Value>,
+    request_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -287,13 +296,14 @@ async fn branch_create(args: BranchCreateArgs) -> Result<()> {
         branch: &args.name,
         from_changeset_id: args.from.as_deref(),
     };
-    let url = format!("{}/v1/branches", profile.server.trim_end_matches('/'));
-    let response: ApiResponse<BranchRecord> =
-        client.post(url).json(&payload).send().await?.json().await?;
+    let url = format!("{}/v2/branches", profile.server.trim_end_matches('/'));
+    let response: ApiResponse<BranchRecord> = send_api(
+        client.post(url).json(&payload),
+        "create branch response decode failed",
+    )
+    .await?;
     if !response.success {
-        return Err(anyhow!(response
-            .error
-            .unwrap_or_else(|| "create branch failed".to_string())));
+        return Err(anyhow!(api_error_message(&response, "create branch failed")));
     }
     println!("branch created: {}", args.name);
     Ok(())
@@ -303,15 +313,14 @@ async fn branch_list(args: BranchListArgs) -> Result<()> {
     let profile = load_profile()?;
     let client = http_client(&profile)?;
     let url = format!(
-        "{}/v1/branches/{}",
+        "{}/v2/branches/{}",
         profile.server.trim_end_matches('/'),
         args.repo
     );
-    let response: ApiResponse<BranchListResponse> = client.get(url).send().await?.json().await?;
+    let response: ApiResponse<BranchListResponse> =
+        send_api(client.get(url), "list branches response decode failed").await?;
     if !response.success {
-        return Err(anyhow!(response
-            .error
-            .unwrap_or_else(|| "list branches failed".to_string())));
+        return Err(anyhow!(api_error_message(&response, "list branches failed")));
     }
     let data = response.data.context("missing response data")?;
     for branch in data.branches {
@@ -330,15 +339,14 @@ async fn branch_switch(args: BranchSwitchArgs) -> Result<()> {
     let mut profile = load_profile()?;
     let client = http_client(&profile)?;
     let url = format!(
-        "{}/v1/branches/{}",
+        "{}/v2/branches/{}",
         profile.server.trim_end_matches('/'),
         args.repo
     );
-    let response: ApiResponse<BranchListResponse> = client.get(url).send().await?.json().await?;
+    let response: ApiResponse<BranchListResponse> =
+        send_api(client.get(url), "switch branch response decode failed").await?;
     if !response.success {
-        return Err(anyhow!(response
-            .error
-            .unwrap_or_else(|| "list branches failed".to_string())));
+        return Err(anyhow!(api_error_message(&response, "list branches failed")));
     }
     let data = response.data.context("missing response data")?;
     if !data.branches.iter().any(|b| b.name == args.name) {
@@ -422,13 +430,14 @@ async fn submit(args: SubmitArgs) -> Result<()> {
         assets: &stage.assets,
     };
 
-    let url = format!("{}/v1/changesets", profile.server.trim_end_matches('/'));
-    let response: ApiResponse<ChangesetRecord> =
-        client.post(url).json(&payload).send().await?.json().await?;
+    let url = format!("{}/v2/changesets", profile.server.trim_end_matches('/'));
+    let response: ApiResponse<ChangesetRecord> = send_api(
+        client.post(url).json(&payload),
+        "submit response decode failed",
+    )
+    .await?;
     if !response.success {
-        return Err(anyhow!(response
-            .error
-            .unwrap_or_else(|| "submit failed".to_string())));
+        return Err(anyhow!(api_error_message(&response, "submit failed")));
     }
     let changeset = response.data.context("missing response data")?;
     stage.base_changeset_id = Some(changeset.changeset_id.clone());
@@ -450,17 +459,16 @@ async fn show_log(args: LogArgs) -> Result<()> {
         .unwrap_or_else(|| profile.current_branch.clone());
     let client = http_client(&profile)?;
     let url = format!(
-        "{}/v1/history/{}?branch={}&limit={}",
+        "{}/v2/history/{}?branch={}&limit={}",
         profile.server.trim_end_matches('/'),
         repo,
         branch,
         args.limit
     );
-    let response: ApiResponse<HistoryPage> = client.get(url).send().await?.json().await?;
+    let response: ApiResponse<HistoryPage> =
+        send_api(client.get(url), "log response decode failed").await?;
     if !response.success {
-        return Err(anyhow!(response
-            .error
-            .unwrap_or_else(|| "log failed".to_string())));
+        return Err(anyhow!(api_error_message(&response, "log failed")));
     }
     let history = response.data.context("missing response data")?;
     for item in history.items {
@@ -487,13 +495,14 @@ async fn rollback(args: RollbackArgs) -> Result<()> {
         author: &author,
         message: args.message.as_deref(),
     };
-    let url = format!("{}/v1/rollback", profile.server.trim_end_matches('/'));
-    let response: ApiResponse<serde_json::Value> =
-        client.post(url).json(&payload).send().await?.json().await?;
+    let url = format!("{}/v2/rollback", profile.server.trim_end_matches('/'));
+    let response: ApiResponse<serde_json::Value> = send_api(
+        client.post(url).json(&payload),
+        "rollback response decode failed",
+    )
+    .await?;
     if !response.success {
-        return Err(anyhow!(response
-            .error
-            .unwrap_or_else(|| "rollback failed".to_string())));
+        return Err(anyhow!(api_error_message(&response, "rollback failed")));
     }
     println!(
         "rollback submitted on {}@{} to {}",
@@ -510,7 +519,7 @@ async fn sync(args: SyncArgs) -> Result<()> {
         .unwrap_or_else(|| profile.current_branch.clone());
     let client = http_client(&profile)?;
     let mut url = format!(
-        "{}/v1/sync/{}?branch={}",
+        "{}/v2/sync/{}?branch={}",
         profile.server.trim_end_matches('/'),
         repo,
         branch
@@ -520,11 +529,10 @@ async fn sync(args: SyncArgs) -> Result<()> {
         url.push_str(to);
     }
 
-    let response: ApiResponse<SyncResponse> = client.get(url).send().await?.json().await?;
+    let response: ApiResponse<SyncResponse> =
+        send_api(client.get(url), "sync response decode failed").await?;
     if !response.success {
-        return Err(anyhow!(response
-            .error
-            .unwrap_or_else(|| "sync failed".to_string())));
+        return Err(anyhow!(api_error_message(&response, "sync failed")));
     }
     let snapshot = response.data.context("missing response data")?;
 
@@ -556,17 +564,16 @@ async fn resolve_base_changeset(
     }
 
     let url = format!(
-        "{}/v1/branches/{}",
+        "{}/v2/branches/{}",
         profile.server.trim_end_matches('/'),
         repo
     );
-    let response: ApiResponse<BranchListResponse> = client.get(url).send().await?.json().await?;
+    let response: ApiResponse<BranchListResponse> =
+        send_api(client.get(url), "resolve base response decode failed").await?;
     if !response.success {
         return Err(anyhow!(
             "{}",
-            response
-                .error
-                .unwrap_or_else(|| "failed to resolve branch head".to_string())
+            api_error_message(&response, "failed to resolve branch head")
         ));
     }
     let data = response.data.context("missing response data")?;
@@ -581,12 +588,11 @@ async fn resolve_base_changeset(
 }
 
 async fn fetch_owner_id(client: &reqwest::Client, profile: &CliProfile) -> Result<String> {
-    let url = format!("{}/api/auth/verify", profile.server.trim_end_matches('/'));
-    let response: ApiResponse<VerifyResponse> = client.get(url).send().await?.json().await?;
+    let url = format!("{}/v2/auth/verify", profile.server.trim_end_matches('/'));
+    let response: ApiResponse<VerifyResponse> =
+        send_api(client.get(url), "verify response decode failed").await?;
     if !response.success {
-        return Err(anyhow!(response
-            .error
-            .unwrap_or_else(|| "verify failed".to_string())));
+        return Err(anyhow!(api_error_message(&response, "verify failed")));
     }
     let verify = response.data.context("missing verify data")?;
     if !verify.valid {
@@ -601,6 +607,50 @@ fn http_client(profile: &CliProfile) -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
         .default_headers(headers)
         .build()?)
+}
+
+fn api_error_message<T>(response: &ApiResponse<T>, fallback: &str) -> String {
+    response
+        .error
+        .as_ref()
+        .map(|error| {
+            format!(
+                "[{}] {} (request_id={})",
+                error.code, error.message, error.request_id
+            )
+        })
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+async fn send_api<T: DeserializeOwned>(
+    request: reqwest::RequestBuilder,
+    context: &str,
+) -> Result<ApiResponse<T>> {
+    let response = request.send().await?;
+    let status = response.status();
+    let body = response.text().await?;
+
+    match serde_json::from_str::<ApiResponse<T>>(&body) {
+        Ok(payload) => Ok(payload),
+        Err(_) => Err(anyhow!(
+            "{}: HTTP {} with non-JSON response body: {}",
+            context,
+            status,
+            summarize_body(&body)
+        )),
+    }
+}
+
+fn summarize_body(body: &str) -> String {
+    let compact = body.trim().replace('\n', " ");
+    if compact.is_empty() {
+        return "<empty>".to_string();
+    }
+    if compact.chars().count() > 200 {
+        let preview: String = compact.chars().take(200).collect();
+        return format!("{}...", preview);
+    }
+    compact
 }
 
 fn resolve_repo(profile: &CliProfile, repo: Option<&str>) -> Result<String> {

@@ -7,10 +7,10 @@ BASE_URL = "http://localhost:3000"
 DEV_MASTER_KEY = "dev-master-key"
 
 def print_pass(msg):
-    print(f"✅ {msg}")
+    print(f"[PASS] {msg}")
 
 def print_fail(msg):
-    print(f"❌ {msg}")
+    print(f"[FAIL] {msg}")
     sys.exit(1)
 
 def test_health():
@@ -28,7 +28,7 @@ def test_auth():
     # Verify Master Key
     headers = {"X-API-Key": DEV_MASTER_KEY}
     try:
-        r = requests.get(f"{BASE_URL}/api/auth/verify", headers=headers)
+        r = requests.get(f"{BASE_URL}/v2/auth/verify", headers=headers)
         if r.status_code != 200:
             print_fail(f"Master key verify failed: {r.status_code}")
         
@@ -44,7 +44,7 @@ def test_auth():
             "permissions": ["lock", "upload", "download"],
             "expires_in_days": 7
         }
-        r = requests.post(f"{BASE_URL}/api/auth/generate", json=payload, headers=headers)
+        r = requests.post(f"{BASE_URL}/v2/auth/generate", json=payload, headers=headers)
         if r.status_code == 201:
             new_key_data = r.json()["data"]
             new_key = new_key_data["key"]
@@ -64,7 +64,7 @@ def test_storage(api_key):
     
     try:
         # Upload
-        r = requests.post(f"{BASE_URL}/api/upload", files=files, headers=headers)
+        r = requests.post(f"{BASE_URL}/v2/storage/upload", files=files, headers=headers)
         if r.status_code == 200:
             data = r.json()["data"]
             file_hash = data["hash"]
@@ -74,14 +74,14 @@ def test_storage(api_key):
             return None
 
         # Check Exists
-        r = requests.get(f"{BASE_URL}/api/exists/{file_hash}", headers=headers)
+        r = requests.get(f"{BASE_URL}/v2/storage/exists/{file_hash}", headers=headers)
         if r.json()["data"] == True:
             print_pass("File existence check passed")
         else:
             print_fail("File existence check failed")
 
         # Download
-        r = requests.get(f"{BASE_URL}/api/download/{file_hash}", headers=headers)
+        r = requests.get(f"{BASE_URL}/v2/storage/download/{file_hash}", headers=headers)
         if r.status_code == 200 and r.content == content:
             print_pass("File download passed")
         else:
@@ -101,14 +101,14 @@ def test_lock(api_key):
     try:
         # Lock
         payload = {"file_path": file_path, "owner_id": owner_id}
-        r = requests.post(f"{BASE_URL}/api/lock", json=payload, headers=headers)
+        r = requests.post(f"{BASE_URL}/v2/locks/acquire", json=payload, headers=headers)
         if r.status_code == 200:
             print_pass(f"Locked file: {file_path}")
         else:
             print_fail(f"Lock failed: {r.text}")
 
         # List Locks
-        r = requests.get(f"{BASE_URL}/api/locks", headers=headers)
+        r = requests.get(f"{BASE_URL}/v2/locks", headers=headers)
         locks = r.json()["data"]
         found = any(l["file_path"] == file_path for l in locks)
         if found:
@@ -118,9 +118,7 @@ def test_lock(api_key):
 
         # Unlock
         unlock_payload = {"file_path": file_path, "owner_id": owner_id}
-        # Note: The API in lock.rs uses DELETE method
-        # But wait, does requests.delete support json body? Yes.
-        r = requests.delete(f"{BASE_URL}/api/unlock", json=unlock_payload, headers=headers)
+        r = requests.post(f"{BASE_URL}/v2/locks/release", json=unlock_payload, headers=headers)
         if r.status_code == 200:
             print_pass("Unlock passed")
         else:
@@ -130,10 +128,10 @@ def test_lock(api_key):
         print_fail(f"Lock test exception: {e}")
 
 if __name__ == "__main__":
-    print("🚀 Starting Hypertide Integration Tests...")
+    print("Starting Hypertide Integration Tests...")
     test_health()
     new_key = test_auth()
     if new_key:
         test_storage(new_key)
         test_lock(new_key)
-    print("\n✨ All tests passed successfully!")
+    print("\nAll tests passed successfully!")
