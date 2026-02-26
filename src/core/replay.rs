@@ -1,7 +1,7 @@
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::PgPool;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct ReplaySummary {
@@ -31,7 +31,15 @@ pub struct ReplayService {
 struct EventRow {
     event_type: String,
     payload: Value,
+    repo_id: Option<String>,
     changeset_id: Option<String>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct BranchHeadRow {
+    repo_id: String,
+    branch_name: String,
+    head_changeset_id: String,
 }
 
 #[derive(Debug, Default)]
@@ -39,10 +47,17 @@ struct ReplayAccumulator {
     summary: ReplaySummary,
     current_locks: HashSet<String>,
     current_visible_changesets: HashSet<String>,
+    branch_heads: HashMap<String, String>,
 }
 
 impl ReplayAccumulator {
-    fn apply_event(&mut self, event_type: &str, payload: Option<&Value>, changeset_id: Option<&str>) {
+    fn apply_event(
+        &mut self,
+        event_type: &str,
+        payload: Option<&Value>,
+        changeset_id: Option<&str>,
+        repo_id: Option<&str>,
+    ) {
         self.summary.events_processed += 1;
         match event_type {
             "LOCK_ACQUIRED" => {
@@ -62,6 +77,7 @@ impl ReplayAccumulator {
                 if let Some(id) = changeset_id {
                     self.current_visible_changesets.insert(id.to_string());
                 }
+                self.update_branch_head(payload, changeset_id, repo_id);
             }
             "CHANGESET_APPROVED" => {
                 self.summary.changeset_approved += 1;
@@ -71,14 +87,42 @@ impl ReplayAccumulator {
                 if let Some(id) = changeset_id {
                     self.current_visible_changesets.insert(id.to_string());
                 }
+                self.update_branch_head(payload, changeset_id, repo_id);
             }
             _ => {}
         }
+    }
+
+    fn update_branch_head(
+        &mut self,
+        payload: Option<&Value>,
+        changeset_id: Option<&str>,
+        repo_id: Option<&str>,
+    ) {
+        let Some(repo) = repo_id else {
+            return;
+        };
+        let Some(branch) = extract_branch(payload) else {
+            return;
+        };
+        let Some(changeset_id) = changeset_id else {
+            return;
+        };
+        self.branch_heads
+            .insert(branch_head_key(repo, branch), changeset_id.to_string());
     }
 }
 
 fn extract_file_path(payload: Option<&Value>) -> Option<&str> {
     payload?.get("file_path")?.as_str()
+}
+
+fn extract_branch(payload: Option<&Value>) -> Option<&str> {
+    payload?.get("branch")?.as_str()
+}
+
+fn branch_head_key(repo_id: &str, branch: &str) -> String {
+    format!("{repo_id}::{branch}")
 }
 
 impl ReplayService {
@@ -89,7 +133,7 @@ impl ReplayService {
     pub async fn verify(&self) -> Result<ReplayVerification, sqlx::Error> {
         let events = sqlx::query_as::<_, EventRow>(
             r#"
-            SELECT event_type, payload, changeset_id
+            SELECT event_type, payload, repo_id, changeset_id
             FROM event_store
             ORDER BY event_id ASC
             "#,
@@ -103,6 +147,7 @@ impl ReplayService {
                 &event.event_type,
                 Some(&event.payload),
                 event.changeset_id.as_deref(),
+                event.repo_id.as_deref(),
             );
         }
 
@@ -132,6 +177,39 @@ impl ReplayService {
             ));
         }
 
+        let branch_rows = sqlx::query_as::<_, BranchHeadRow>(
+            r#"
+            SELECT repo_id, branch_name, head_changeset_id
+            FROM branches
+            WHERE head_changeset_id IS NOT NULL
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut db_heads = HashMap::new();
+        for row in branch_rows {
+            let key = branch_head_key(&row.repo_id, &row.branch_name);
+            db_heads.insert(key, row.head_changeset_id);
+        }
+        for (key, db_head) in &db_heads {
+            match replay.branch_heads.get(key) {
+                Some(replay_head) if replay_head == db_head => {}
+                Some(replay_head) => mismatches.push(format!(
+                    "branch head mismatch for {key}: replay_head={replay_head}, db_head={db_head}"
+                )),
+                None => mismatches.push(format!(
+                    "branch head missing in replay for {key}: db_head={db_head}"
+                )),
+            }
+        }
+        for (key, replay_head) in &replay.branch_heads {
+            if !db_heads.contains_key(key) {
+                mismatches.push(format!(
+                    "branch head missing in db for {key}: replay_head={replay_head}"
+                ));
+            }
+        }
+
         Ok(ReplayVerification {
             summary: replay.summary,
             current_locks,
@@ -151,9 +229,24 @@ mod tests {
     fn rebuilds_lock_state_from_event_payloads() {
         let mut acc = ReplayAccumulator::default();
 
-        acc.apply_event("LOCK_ACQUIRED", Some(&json!({ "file_path": "assets/a.uasset" })), None);
-        acc.apply_event("LOCK_RENEWED", Some(&json!({ "file_path": "assets/a.uasset" })), None);
-        acc.apply_event("LOCK_RELEASED", Some(&json!({ "file_path": "assets/a.uasset" })), None);
+        acc.apply_event(
+            "LOCK_ACQUIRED",
+            Some(&json!({ "file_path": "assets/a.uasset" })),
+            None,
+            None,
+        );
+        acc.apply_event(
+            "LOCK_RENEWED",
+            Some(&json!({ "file_path": "assets/a.uasset" })),
+            None,
+            None,
+        );
+        acc.apply_event(
+            "LOCK_RELEASED",
+            Some(&json!({ "file_path": "assets/a.uasset" })),
+            None,
+            None,
+        );
 
         assert_eq!(acc.current_locks.len(), 0);
         assert_eq!(acc.summary.lock_acquired, 1);
@@ -164,14 +257,44 @@ mod tests {
     fn rebuilds_visible_changeset_state_from_events() {
         let mut acc = ReplayAccumulator::default();
 
-        acc.apply_event("CHANGESET_VISIBLE", Some(&json!({})), Some("cs_visible"));
-        acc.apply_event("CHANGESET_APPROVED", Some(&json!({})), Some("cs_draft"));
-        acc.apply_event("CHANGESET_PROMOTED", Some(&json!({})), Some("cs_promoted"));
-        acc.apply_event("ROLLBACK_VISIBLE", Some(&json!({})), Some("cs_rollback"));
+        acc.apply_event("CHANGESET_VISIBLE", Some(&json!({})), Some("cs_visible"), None);
+        acc.apply_event("CHANGESET_APPROVED", Some(&json!({})), Some("cs_draft"), None);
+        acc.apply_event(
+            "CHANGESET_PROMOTED",
+            Some(&json!({})),
+            Some("cs_promoted"),
+            None,
+        );
+        acc.apply_event(
+            "ROLLBACK_VISIBLE",
+            Some(&json!({})),
+            Some("cs_rollback"),
+            None,
+        );
 
         assert_eq!(acc.current_visible_changesets.len(), 3);
         assert_eq!(acc.summary.changeset_visible, 2);
         assert_eq!(acc.summary.changeset_approved, 1);
         assert_eq!(acc.summary.changeset_promoted, 1);
+    }
+
+    #[test]
+    fn tracks_latest_branch_head_from_visible_events() {
+        let mut acc = ReplayAccumulator::default();
+
+        acc.apply_event(
+            "CHANGESET_VISIBLE",
+            Some(&json!({ "branch": "main" })),
+            Some("cs1"),
+            Some("repo-a"),
+        );
+        acc.apply_event(
+            "CHANGESET_PROMOTED",
+            Some(&json!({ "branch": "main" })),
+            Some("cs2"),
+            Some("repo-a"),
+        );
+
+        assert_eq!(acc.branch_heads.get("repo-a::main"), Some(&"cs2".to_string()));
     }
 }
