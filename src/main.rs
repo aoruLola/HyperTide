@@ -22,12 +22,14 @@ use crate::api::blobs::{missing_chunks, upload_chunk};
 use crate::api::lock::{force_unlock_file, list_locks, lock_file, renew_lock_file, unlock_file};
 use crate::api::manifests::create_manifest;
 use crate::api::storage::{calculate_hash, check_exists, download_file, upload_file};
+use crate::api::trust::{generate_checkpoint, latest_checkpoint};
 use crate::api::versioning::{
     approve_changeset, create_branch, list_branches, list_history, promote_changeset, rollback,
     submit_changeset, sync_snapshot,
 };
 use crate::core::auth::AuthManager;
 use crate::core::audit_chain::AuditChain;
+use crate::core::checkpoint::CheckpointService;
 use crate::core::db::{migrations::run_migrations, pool::init_pg_pool_from_env};
 use crate::core::events::EventStore;
 use crate::core::lock::LockManager;
@@ -54,6 +56,7 @@ pub struct AppState {
     pub version_manager: VersionManager,
     pub event_store: Option<EventStore>,
     pub audit_chain: Option<AuditChain>,
+    pub checkpoint_service: Option<CheckpointService>,
     pub db_pool: Option<PgPool>,
 }
 
@@ -125,6 +128,8 @@ fn build_app(state: AppState) -> Router {
         .route("/v2/history/:repo_id", get(list_history))
         .route("/v2/rollback", post(rollback))
         .route("/v2/sync/:repo_id", get(sync_snapshot))
+        .route("/v2/trust/checkpoints/generate", post(generate_checkpoint))
+        .route("/v2/trust/checkpoints/latest", get(latest_checkpoint))
         .layer(cors)
         .with_state(state)
 }
@@ -194,6 +199,7 @@ async fn main() {
         version_manager,
         event_store: Some(EventStore::new(db_pool.clone())),
         audit_chain: Some(AuditChain::new(db_pool.clone())),
+        checkpoint_service: Some(CheckpointService::new(db_pool.clone())),
         db_pool: Some(db_pool),
     };
 
@@ -255,6 +261,7 @@ mod tests {
             version_manager: VersionManager::new(),
             event_store: None,
             audit_chain: None,
+            checkpoint_service: None,
             db_pool: None,
         }
     }
