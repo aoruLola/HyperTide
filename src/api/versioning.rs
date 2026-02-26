@@ -187,12 +187,16 @@ pub async fn create_branch(
         Err((status, message)) => return (status, Json(ApiResponse::err(message))),
     };
 
-    match state.version_manager.create_branch(
+    match state
+        .version_manager
+        .create_branch(
         &payload.repo_id,
         &payload.branch,
         payload.from_changeset_id.as_deref(),
         &identity.owner_id,
-    ) {
+    )
+    .await
+    {
         Ok(branch) => (StatusCode::CREATED, Json(ApiResponse::ok(branch))),
         Err(error) => {
             let (status, message) = map_versioning_error(error);
@@ -264,7 +268,7 @@ pub async fn submit_changeset(
         assets: payload.assets,
     };
 
-    match state.version_manager.submit_changeset(input) {
+    match state.version_manager.submit_changeset(input).await {
         Ok(changeset) => (StatusCode::CREATED, Json(ApiResponse::ok(changeset))),
         Err(error) => {
             let (status, message) = map_versioning_error(error);
@@ -349,7 +353,7 @@ pub async fn rollback(
         assets: plan.assets.clone(),
     };
 
-    match state.version_manager.submit_changeset(input) {
+    match state.version_manager.submit_changeset(input).await {
         Ok(changeset) => (
             StatusCode::CREATED,
             Json(ApiResponse::ok(RollbackResponse {

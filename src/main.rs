@@ -160,11 +160,19 @@ async fn main() {
         }
     };
 
+    let version_manager = match VersionManager::with_pg(db_pool.clone()).await {
+        Ok(manager) => manager,
+        Err(e) => {
+            tracing::error!("Failed to initialize version manager: {e}");
+            return;
+        }
+    };
+
     let state = AppState {
         lock_manager,
         storage_manager,
         auth_manager,
-        version_manager: VersionManager::with_persistence("./storage/versioning/repos.json"),
+        version_manager,
         db_pool: Some(db_pool),
     };
 

@@ -4,7 +4,11 @@ use std::sync::{Arc, RwLock};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 use uuid::Uuid;
+
+pub mod repo_pg;
+use self::repo_pg::VersionRepoPg;
 
 pub const ROOT_BASE_CHANGESET_ID: &str = "ROOT";
 
@@ -13,6 +17,15 @@ pub const ROOT_BASE_CHANGESET_ID: &str = "ROOT";
 pub enum ChangesetKind {
     Normal,
     Rollback,
+}
+
+impl ChangesetKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ChangesetKind::Normal => "normal",
+            ChangesetKind::Rollback => "rollback",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,6 +134,7 @@ pub enum VersioningError {
 pub struct VersionManager {
     repos: Arc<RwLock<HashMap<String, RepoState>>>,
     persistence_path: Option<PathBuf>,
+    repo_pg: Option<VersionRepoPg>,
 }
 
 impl VersionManager {
@@ -128,6 +142,7 @@ impl VersionManager {
         Self {
             repos: Arc::new(RwLock::new(HashMap::new())),
             persistence_path: None,
+            repo_pg: None,
         }
     }
 
@@ -148,18 +163,32 @@ impl VersionManager {
         Self {
             repos: Arc::new(RwLock::new(repos)),
             persistence_path: Some(persistence_path),
+            repo_pg: None,
         }
     }
 
-    pub fn create_branch(
+    pub async fn with_pg(pool: PgPool) -> Result<Self, String> {
+        let repo_pg = VersionRepoPg::new(pool);
+        let repos = repo_pg
+            .load_repos()
+            .await
+            .map_err(|error| format!("failed to load versioning state from db: {error}"))?;
+        Ok(Self {
+            repos: Arc::new(RwLock::new(repos)),
+            persistence_path: None,
+            repo_pg: Some(repo_pg),
+        })
+    }
+
+    pub async fn create_branch(
         &self,
         repo_id: &str,
         branch: &str,
         from_changeset_id: Option<&str>,
         created_by: &str,
     ) -> Result<BranchRecord, VersioningError> {
-        let mut repos = self.repos.write().expect("versioning lock poisoned");
-        let record = {
+        let (record, snapshot) = {
+            let mut repos = self.repos.write().expect("versioning lock poisoned");
             let repo = repos
                 .entry(repo_id.to_string())
                 .or_insert_with(|| RepoState::new(created_by));
@@ -210,12 +239,11 @@ impl VersionManager {
                 },
             );
 
-            record
+            (record, repos.clone())
         };
-
-        let snapshot = repos.clone();
-        drop(repos);
-        self.persist_repos(&snapshot);
+        if let Err(error) = self.persist_repo(repo_id, &snapshot).await {
+            tracing::error!("failed to persist branch state for {repo_id}: {error}");
+        }
 
         Ok(record)
     }
@@ -234,20 +262,36 @@ impl VersionManager {
         Ok(items)
     }
 
-    pub fn submit_changeset(
+    pub async fn submit_changeset(
         &self,
         input: SubmitChangesetInput,
     ) -> Result<ChangesetRecord, VersioningError> {
-        let mut repos = self.repos.write().expect("versioning lock poisoned");
-        let repo = repos
-            .entry(input.repo_id.clone())
-            .or_insert_with(|| RepoState::new(&input.author));
-        repo.ensure_default_branch(&input.author);
-        let result = Self::submit_internal(repo, input);
+        let repo_id = input.repo_id.clone();
+        let (result, snapshot) = {
+            let mut repos = self.repos.write().expect("versioning lock poisoned");
+            let repo = repos
+                .entry(input.repo_id.clone())
+                .or_insert_with(|| RepoState::new(&input.author));
+            repo.ensure_default_branch(&input.author);
+            let result = Self::submit_internal(repo, input);
+            let snapshot = if result.is_ok() {
+                Some(repos.clone())
+            } else {
+                None
+            };
+            (result, snapshot)
+        };
+
         if result.is_ok() {
-            let snapshot = repos.clone();
-            drop(repos);
-            self.persist_repos(&snapshot);
+            if let Some(snapshot) = snapshot {
+                if let Err(error) = self.persist_repo(&repo_id, &snapshot).await {
+                    tracing::error!("failed to persist changeset state for {repo_id}: {error}");
+                }
+            } else {
+                tracing::error!(
+                    "failed to persist changeset state for {repo_id}: missing in-memory snapshot"
+                );
+            }
         }
         result
     }
@@ -517,7 +561,26 @@ impl VersionManager {
             .map_err(|error| format!("failed to parse state file {}: {error}", path.display()))
     }
 
-    fn persist_repos(&self, repos: &HashMap<String, RepoState>) {
+    async fn persist_repo(
+        &self,
+        repo_id: &str,
+        repos: &HashMap<String, RepoState>,
+    ) -> Result<(), String> {
+        if let Some(repo_pg) = &self.repo_pg {
+            if let Some(state) = repos.get(repo_id) {
+                repo_pg
+                    .replace_repo_state(repo_id, state)
+                    .await
+                    .map_err(|error| format!("db persistence failed: {error}"))?;
+            }
+            return Ok(());
+        }
+
+        self.persist_repos_file(repos);
+        Ok(())
+    }
+
+    fn persist_repos_file(&self, repos: &HashMap<String, RepoState>) {
         let Some(path) = self.persistence_path.as_ref() else {
             return;
         };
@@ -569,13 +632,13 @@ impl Default for VersionManager {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct BranchState {
+pub(super) struct BranchState {
     record: BranchRecord,
     history: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct RepoState {
+pub(super) struct RepoState {
     default_branch: String,
     branches: HashMap<String, BranchState>,
     changesets: HashMap<String, ChangesetRecord>,
@@ -637,8 +700,8 @@ impl RepoState {
 mod tests {
     use super::*;
 
-    #[test]
-    fn submit_with_head_match_advances_branch_head() {
+    #[tokio::test]
+    async fn submit_with_head_match_advances_branch_head() {
         let manager = VersionManager::new();
 
         let c1 = manager
@@ -655,6 +718,7 @@ mod tests {
                     blob_hash: Some("hash-1".to_string()),
                 }],
             })
+            .await
             .expect("first commit should succeed");
 
         let c2 = manager
@@ -671,6 +735,7 @@ mod tests {
                     blob_hash: Some("hash-2".to_string()),
                 }],
             })
+            .await
             .expect("second commit should succeed");
 
         let sync = manager
@@ -681,8 +746,8 @@ mod tests {
         assert_eq!(sync.assets[0].blob_hash, "hash-2");
     }
 
-    #[test]
-    fn stale_base_is_rejected() {
+    #[tokio::test]
+    async fn stale_base_is_rejected() {
         let manager = VersionManager::new();
 
         let c1 = manager
@@ -696,6 +761,7 @@ mod tests {
                 message: "first".to_string(),
                 assets: vec![],
             })
+            .await
             .expect("first should succeed");
 
         let c2 = manager
@@ -709,6 +775,7 @@ mod tests {
                 message: "invalid".to_string(),
                 assets: vec![],
             })
+            .await
             .expect_err("stale base must fail");
 
         assert_eq!(
@@ -722,8 +789,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn rollback_plan_targets_existing_history() {
+    #[tokio::test]
+    async fn rollback_plan_targets_existing_history() {
         let manager = VersionManager::new();
         let c1 = manager
             .submit_changeset(SubmitChangesetInput {
@@ -739,6 +806,7 @@ mod tests {
                     blob_hash: Some("h1".to_string()),
                 }],
             })
+            .await
             .expect("first commit");
 
         let c2 = manager
@@ -755,6 +823,7 @@ mod tests {
                     blob_hash: Some("h2".to_string()),
                 }],
             })
+            .await
             .expect("second commit");
 
         let plan = manager
@@ -775,6 +844,7 @@ mod tests {
                 message: "rollback".to_string(),
                 assets: plan.assets,
             })
+            .await
             .expect("rollback commit should be accepted");
 
         let sync = manager
@@ -783,8 +853,8 @@ mod tests {
         assert_eq!(sync.assets[0].blob_hash, "h1");
     }
 
-    #[test]
-    fn persists_state_across_manager_restarts() {
+    #[tokio::test]
+    async fn persists_state_across_manager_restarts() {
         let state_file = std::env::temp_dir().join(format!(
             "hypertide-versioning-{}.json",
             Uuid::new_v4()
@@ -805,6 +875,7 @@ mod tests {
                     blob_hash: Some("blob-v1".to_string()),
                 }],
             })
+            .await
             .expect("submit should persist");
 
         let second_manager = VersionManager::with_persistence(&state_file);
