@@ -3,6 +3,7 @@ pub mod audit_chain;
 pub mod checkpoint;
 pub mod db;
 pub mod events;
+pub mod high_risk;
 pub mod lock;
 pub mod storage;
 pub mod versioning;

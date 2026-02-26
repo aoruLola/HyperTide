@@ -392,6 +392,23 @@ pub async fn rollback(
             Json(ApiResponse::err("author must match API key owner")),
         );
     }
+    if let Some(guard) = &state.high_risk_guard {
+        if let Err(message) = guard
+            .verify(
+                &headers,
+                "ROLLBACK",
+                &identity.owner_id,
+                &json!({
+                    "repo_id": payload.repo_id,
+                    "branch": payload.branch,
+                    "target_changeset_id": payload.target_changeset_id,
+                }),
+            )
+            .await
+        {
+            return (StatusCode::UNAUTHORIZED, Json(ApiResponse::err(message)));
+        }
+    }
 
     let plan = match state.version_manager.build_rollback_plan(
         &payload.repo_id,
@@ -554,6 +571,22 @@ pub async fn promote_changeset(
         Ok(key) => key,
         Err((status, message)) => return (status, Json(ApiResponse::err(message))),
     };
+    if let Some(guard) = &state.high_risk_guard {
+        if let Err(message) = guard
+            .verify(
+                &headers,
+                "CHANGESET_PROMOTE",
+                &identity.owner_id,
+                &json!({
+                    "repo_id": query.repo_id,
+                    "changeset_id": changeset_id,
+                }),
+            )
+            .await
+        {
+            return (StatusCode::UNAUTHORIZED, Json(ApiResponse::err(message)));
+        }
+    }
 
     match state
         .version_manager

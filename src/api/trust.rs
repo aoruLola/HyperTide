@@ -7,6 +7,7 @@ use serde::Deserialize;
 
 use crate::api::{common::ApiResponse, middleware::authz};
 use crate::core::{
+    audit_chain::AuditVerifyResult,
     auth::Permission,
     checkpoint::CheckpointRecord,
     witness::{WitnessReceipt, WitnessSummary},
@@ -130,5 +131,29 @@ pub async fn witness_summary(
     match service.summary(&query.checkpoint_id).await {
         Ok(summary) => (StatusCode::OK, Json(ApiResponse::ok(summary))),
         Err(message) => (StatusCode::BAD_REQUEST, Json(ApiResponse::err(message))),
+    }
+}
+
+pub async fn verify_audit_chain(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<ApiResponse<AuditVerifyResult>>) {
+    if let Err((status, message)) = require_permission(&state, &headers, Permission::Admin).await {
+        return (status, Json(ApiResponse::err(message)));
+    }
+
+    let Some(audit_chain) = &state.audit_chain else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse::err("audit chain unavailable")),
+        );
+    };
+
+    match audit_chain.verify_chain().await {
+        Ok(result) => (StatusCode::OK, Json(ApiResponse::ok(result))),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::err(format!("failed to verify audit chain: {error}"))),
+        ),
     }
 }

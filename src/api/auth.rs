@@ -246,6 +246,22 @@ pub async fn revoke_key(
         );
     }
 
+    if let Some(guard) = &state.high_risk_guard {
+        if let Err(message) = guard
+            .verify(
+                &headers,
+                "KEY_REVOKE",
+                "admin",
+                &json!({
+                    "target_key_prefix": payload.key.chars().take(12).collect::<String>(),
+                }),
+            )
+            .await
+        {
+            return (StatusCode::UNAUTHORIZED, Json(ApiResponse::err(message)));
+        }
+    }
+
     match manager.revoke_key_persistent(&payload.key).await {
         Ok(true) => {
             append_auth_event(

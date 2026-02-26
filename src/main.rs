@@ -22,7 +22,9 @@ use crate::api::blobs::{missing_chunks, upload_chunk};
 use crate::api::lock::{force_unlock_file, list_locks, lock_file, renew_lock_file, unlock_file};
 use crate::api::manifests::create_manifest;
 use crate::api::storage::{calculate_hash, check_exists, download_file, upload_file};
-use crate::api::trust::{attest_checkpoint, generate_checkpoint, latest_checkpoint, witness_summary};
+use crate::api::trust::{
+    attest_checkpoint, generate_checkpoint, latest_checkpoint, verify_audit_chain, witness_summary,
+};
 use crate::api::versioning::{
     approve_changeset, create_branch, list_branches, list_history, promote_changeset, rollback,
     submit_changeset, sync_snapshot,
@@ -32,6 +34,7 @@ use crate::core::audit_chain::AuditChain;
 use crate::core::checkpoint::CheckpointService;
 use crate::core::db::{migrations::run_migrations, pool::init_pg_pool_from_env};
 use crate::core::events::EventStore;
+use crate::core::high_risk::HighRiskGuard;
 use crate::core::lock::LockManager;
 use crate::core::storage::StorageManager;
 use crate::core::versioning::VersionManager;
@@ -59,6 +62,7 @@ pub struct AppState {
     pub audit_chain: Option<AuditChain>,
     pub checkpoint_service: Option<CheckpointService>,
     pub witness_service: Option<WitnessService>,
+    pub high_risk_guard: Option<HighRiskGuard>,
     pub db_pool: Option<PgPool>,
 }
 
@@ -137,6 +141,7 @@ fn build_app(state: AppState) -> Router {
             post(attest_checkpoint),
         )
         .route("/v2/trust/witness/summary", get(witness_summary))
+        .route("/v2/trust/audit/verify", post(verify_audit_chain))
         .layer(cors)
         .with_state(state)
 }
@@ -208,6 +213,7 @@ async fn main() {
         audit_chain: Some(AuditChain::new(db_pool.clone())),
         checkpoint_service: Some(CheckpointService::new(db_pool.clone())),
         witness_service: Some(WitnessService::from_env(db_pool.clone())),
+        high_risk_guard: Some(HighRiskGuard::from_env(db_pool.clone())),
         db_pool: Some(db_pool),
     };
 
@@ -271,6 +277,7 @@ mod tests {
             audit_chain: None,
             checkpoint_service: None,
             witness_service: None,
+            high_risk_guard: None,
             db_pool: None,
         }
     }

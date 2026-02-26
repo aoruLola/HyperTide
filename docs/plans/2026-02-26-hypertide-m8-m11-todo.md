@@ -33,9 +33,9 @@
 | M10-003 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m10-trust-and-governance | done | codex | P0 | 2026-03-30 | none |
 | M10-004 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m10-trust-and-governance | done | codex | P0 | 2026-03-31 | none |
 | M10-005 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m10-trust-and-governance | done | codex | P0 | 2026-03-31 | none |
-| M10-006 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m10-trust-and-governance | todo | codex | P0 | 2026-04-01 | M8-005 |
-| M10-007 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m10-trust-and-governance | todo | codex | P1 | 2026-04-01 | M10-006 |
-| M10-008 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m10-trust-and-governance | todo | codex | P1 | 2026-04-02 | M10-004~007 |
+| M10-006 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m10-trust-and-governance | done | codex | P0 | 2026-04-01 | none |
+| M10-007 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m10-trust-and-governance | done | codex | P1 | 2026-04-01 | none |
+| M10-008 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m10-trust-and-governance | done | codex | P1 | 2026-04-02 | none |
 | M11-001 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | todo | codex | P0 | 2026-04-08 | M10 stable |
 | M11-002 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | todo | codex | P0 | 2026-04-08 | M11-001 |
 | M11-003 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | todo | codex | P0 | 2026-04-10 | M9-008 |

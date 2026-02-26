@@ -311,6 +311,14 @@ paths:
         - BearerAuth: []
       responses:
         '200': { description: Witness summary }
+  /v2/trust/audit/verify:
+    post:
+      summary: Verify audit hash-chain integrity
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Verify result }
 components:
   securitySchemes:
     ApiKeyAuth:

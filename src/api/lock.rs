@@ -169,6 +169,19 @@ pub async fn force_unlock_file(
     if let Err((status, message)) = require_permission(&state, &headers, Permission::Admin).await {
         return (status, Json(ApiResponse::err(message)));
     }
+    if let Some(guard) = &state.high_risk_guard {
+        if let Err(message) = guard
+            .verify(
+                &headers,
+                "LOCK_FORCE_RELEASE",
+                "system-admin",
+                &json!({ "file_path": payload.file_path }),
+            )
+            .await
+        {
+            return (StatusCode::UNAUTHORIZED, Json(ApiResponse::err(message)));
+        }
+    }
 
     match state.lock_manager.force_unlock(&payload.file_path).await {
         Ok(true) => {
