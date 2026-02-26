@@ -1,29 +1,39 @@
-import { useState } from 'react';
-import { Outlet } from 'react-router-dom';
+﻿import { useEffect, useState } from 'react';
+import { Outlet, useLocation } from 'react-router-dom';
 import { Sidebar } from '../components/Sidebar';
 import { Topbar } from '../components/Topbar';
 import { StatusBar } from '../components/StatusBar';
 
 export function MainLayout() {
-  const [sidebarWidth, setSidebarWidth] = useState(240);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const location = useLocation();
+
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [location.pathname]);
 
   return (
-    <div className="h-screen flex flex-col bg-gray-900">
-      {/* Top Bar */}
-      <Topbar />
+    <div data-testid="app-shell" className="app-shell">
+      <div data-testid="app-aurora" className="app-aurora" aria-hidden="true" />
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Sidebar */}
-        <Sidebar width={sidebarWidth} onResize={setSidebarWidth} />
+      <Topbar
+        mobileNavOpen={mobileNavOpen}
+        onToggleNavigation={() => setMobileNavOpen((prev) => !prev)}
+      />
 
-        {/* Main Content */}
-        <main className="flex-1 overflow-hidden">
-          <Outlet />
+      <div data-testid="layout-grid" className="layout-grid">
+        <Sidebar
+          mobileNavOpen={mobileNavOpen}
+          onCloseNavigation={() => setMobileNavOpen(false)}
+        />
+
+        <main data-testid="content-stage" className="content-stage">
+          <div className="content-scroll">
+            <Outlet />
+          </div>
         </main>
       </div>
 
-      {/* Bottom Status Bar */}
       <StatusBar />
     </div>
   );

@@ -18,9 +18,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <HeroUIProvider>
-        <main className="dark text-foreground bg-background">
-          <App />
-        </main>
+        <App />
       </HeroUIProvider>
     </QueryClientProvider>
   </React.StrictMode>,

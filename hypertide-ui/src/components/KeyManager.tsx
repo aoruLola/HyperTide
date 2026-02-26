@@ -19,7 +19,7 @@ export function KeyManager() {
 
   const generateMutation = useMutation({
     mutationFn: (owner: string) =>
-      apiClient.auth.generate(owner, ['Lock', 'Upload', 'Download'], null),
+      apiClient.auth.generate(owner, ['Lock', 'Upload', 'Download']),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['keys'] });
       setOwnerId('');

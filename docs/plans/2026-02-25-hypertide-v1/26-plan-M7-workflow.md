@@ -13,6 +13,11 @@
 - `src/bin/ht.rs`
 - `Cargo.toml`
 
+## Runtime Naming
+- Rust package: `hypertide-cli`
+- Server binary: `hypertide`
+- CLI binary: `ht`
+
 ## Phase 1
 1. Implement branch + head + history primitives.
 2. Implement submit with `branch + base_changeset_id` CAS check.

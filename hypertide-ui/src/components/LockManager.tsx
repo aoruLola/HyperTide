@@ -1,6 +1,14 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Lock, Unlock, AlertCircle, Loader2 } from 'lucide-react';
+import { Lock, Unlock, AlertCircle, Loader2, ShieldCheck, HardDrive } from 'lucide-react';
+import {
+  Button,
+  Input,
+  Card,
+  CardBody,
+  Chip,
+  Tooltip,
+} from '@heroui/react';
 import { apiClient } from '../lib/api';
 import { useAppStore } from '../store/useAppStore';
 import { formatDate } from '../lib/utils';
@@ -42,86 +50,139 @@ export function LockManager() {
   });
 
   return (
-    <div className="space-y-6">
-      {/* Lock Form */}
-      <div className="bg-black/30 backdrop-blur-sm rounded-lg border border-purple-500/20 p-6">
-        <h2 className="text-xl font-semibold text-white mb-4">锁定文件</h2>
-        <div className="flex gap-3">
-          <input
-            type="text"
-            value={filePath}
-            onChange={(e) => setFilePath(e.target.value)}
-            placeholder="输入文件路径，例如: assets/models/character.fbx"
-            className="flex-1 px-4 py-2 bg-black/50 border border-purple-500/30 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
-          />
-          <button
-            onClick={() => lockMutation.mutate(filePath)}
-            disabled={!filePath || lockMutation.isPending}
-            className="px-6 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors flex items-center gap-2"
-          >
-            {lockMutation.isPending ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Lock className="w-4 h-4" />
-            )}
-            锁定
-          </button>
+    <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-6 duration-700">
+      {/* 头部宣传位 */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-black text-gray-900 tracking-tight">Security Vault</h1>
+          <p className="text-sm font-medium text-gray-400 mt-1">Manage asset locks and prevent data conflicts in real-time.</p>
         </div>
-        {lockMutation.isError && (
-          <div className="mt-3 flex items-center gap-2 text-red-400 text-sm">
-            <AlertCircle className="w-4 h-4" />
-            <span>{(lockMutation.error as any)?.response?.data?.error || '锁定失败'}</span>
-          </div>
-        )}
+        <div className="w-12 h-12 rounded-2xl bg-orange-50 flex items-center justify-center border border-orange-100 shadow-sm">
+          <ShieldCheck className="w-6 h-6 text-orange-500" />
+        </div>
       </div>
 
-      {/* Locks List */}
-      <div className="bg-black/30 backdrop-blur-sm rounded-lg border border-purple-500/20 p-6">
-        <h2 className="text-xl font-semibold text-white mb-4">当前锁定</h2>
+      {/* 锁定操作卡片 */}
+      <Card className="border-none shadow-xl shadow-gray-200/50 bg-white/80 backdrop-blur-md">
+        <CardBody className="p-8">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-8 h-8 rounded-lg bg-gray-900 flex items-center justify-center">
+              <Lock className="w-4 h-4 text-white" />
+            </div>
+            <h2 className="text-lg font-bold text-gray-900">Acquire New Lock</h2>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            <div className="flex gap-3">
+              <Input
+                value={filePath}
+                onChange={(e) => setFilePath(e.target.value)}
+                placeholder="Enter file path (e.g. assets/models/hero.fbx)"
+                className="flex-1"
+                size="lg"
+                classNames={{
+                  inputWrapper: "bg-gray-50 border-gray-100 group-data-[focus=true]:bg-white group-data-[focus=true]:ring-2 group-data-[focus=true]:ring-orange-500/20",
+                }}
+              />
+              <Button
+                onClick={() => lockMutation.mutate(filePath)}
+                isLoading={lockMutation.isPending}
+                isDisabled={!filePath}
+                color="primary"
+                size="lg"
+                className="px-8 font-black rounded-xl shadow-lg shadow-orange-200"
+                startContent={!lockMutation.isPending && <Lock className="w-4 h-4" />}
+              >
+                LOCK
+              </Button>
+            </div>
+            {lockMutation.isError && (
+              <div className="px-4 py-3 rounded-xl bg-red-50 border border-red-100 flex items-center gap-3 text-red-600 text-sm font-bold animate-in zoom-in-95 duration-200">
+                <AlertCircle className="w-4 h-4" />
+                <span>{(lockMutation.error as any)?.response?.data?.error || 'Operation failed'}</span>
+              </div>
+            )}
+          </div>
+        </CardBody>
+      </Card>
+
+      {/* 活跃锁定列表 */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between px-2">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-black text-gray-400 uppercase tracking-widest">Active Locks</h3>
+            <Chip size="sm" variant="flat" className="bg-gray-100 text-gray-500 font-bold">{locks?.length || 0}</Chip>
+          </div>
+        </div>
+
         {isLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="w-6 h-6 animate-spin text-purple-400" />
+          <div className="flex flex-col items-center justify-center py-20 bg-gray-50/50 rounded-[40px] border border-dashed border-gray-200">
+            <Loader2 className="w-10 h-10 animate-spin text-orange-400 mb-4" />
+            <p className="text-sm font-bold text-gray-400">Syncing with server...</p>
           </div>
         ) : locks && locks.length > 0 ? (
-          <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-3">
             {locks.map((lock) => (
-              <div
+              <Card
                 key={lock.file_path}
-                className="bg-black/40 rounded-lg p-4 border border-purple-500/10 hover:border-purple-500/30 transition-colors"
+                className="border-none shadow-md shadow-gray-100/50 hover:shadow-xl hover:shadow-gray-200/50 transition-all duration-300 group"
               >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="text-white font-medium mb-1">{lock.file_path}</div>
-                    <div className="text-sm text-gray-400">
-                      锁定者: {lock.owner_id} · {formatDate(lock.locked_at)}
+                <CardBody className="p-5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-2xl bg-gray-50 flex items-center justify-center group-hover:bg-orange-50 transition-colors">
+                        <HardDrive className="w-5 h-5 text-gray-400 group-hover:text-orange-500 transition-colors" />
+                      </div>
+                      <div>
+                        <div className="text-base font-bold text-gray-900 leading-none mb-1.5">{lock.file_path}</div>
+                        <div className="flex items-center gap-2">
+                          <Chip size="sm" variant="flat" className="bg-orange-50 text-orange-600 font-bold text-[10px]">@{lock.owner_id}</Chip>
+                          <span className="text-[10px] font-bold text-gray-300 uppercase leading-none">{formatDate(lock.locked_at)}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {lock.owner_id === userId && (
+                        <Tooltip content="Unlock your asset">
+                          <Button
+                            onClick={() => unlockMutation.mutate(lock.file_path)}
+                            isLoading={unlockMutation.isPending}
+                            color="success"
+                            variant="flat"
+                            size="sm"
+                            className="font-bold rounded-lg text-green-700 bg-green-50"
+                            isIconOnly
+                          >
+                            <Unlock className="w-4 h-4" />
+                          </Button>
+                        </Tooltip>
+                      )}
+                      <Tooltip content="Force unlock (Warning)">
+                        <Button
+                          onClick={() => forceUnlockMutation.mutate(lock.file_path)}
+                          isLoading={forceUnlockMutation.isPending}
+                          color="danger"
+                          variant="flat"
+                          size="sm"
+                          className="font-bold rounded-lg text-red-700 bg-red-50"
+                          isIconOnly
+                        >
+                          <AlertCircle className="w-4 h-4" />
+                        </Button>
+                      </Tooltip>
                     </div>
                   </div>
-                  <div className="flex gap-2">
-                    {lock.owner_id === userId && (
-                      <button
-                        onClick={() => unlockMutation.mutate(lock.file_path)}
-                        disabled={unlockMutation.isPending}
-                        className="px-3 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 text-white text-sm rounded-md transition-colors flex items-center gap-1.5"
-                      >
-                        <Unlock className="w-3.5 h-3.5" />
-                        解锁
-                      </button>
-                    )}
-                    <button
-                      onClick={() => forceUnlockMutation.mutate(lock.file_path)}
-                      disabled={forceUnlockMutation.isPending}
-                      className="px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 text-white text-sm rounded-md transition-colors flex items-center gap-1.5"
-                    >
-                      <AlertCircle className="w-3.5 h-3.5" />
-                      强制解锁
-                    </button>
-                  </div>
-                </div>
-              </div>
+                </CardBody>
+              </Card>
             ))}
           </div>
         ) : (
-          <div className="text-center py-8 text-gray-400">暂无锁定的文件</div>
+          <div className="flex flex-col items-center justify-center py-20 bg-gray-50/50 rounded-[40px] border border-dashed border-gray-200 opacity-60">
+            <Unlock className="w-12 h-12 text-gray-300 mb-4" />
+            <p className="text-lg font-black text-gray-400">No Locks Found</p>
+            <p className="text-xs font-medium text-gray-300">The system is currently free of any restrictions.</p>
+          </div>
         )}
       </div>
     </div>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+﻿import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Table,
@@ -54,83 +54,96 @@ export function LocksPage() {
     },
   });
 
-  const filteredLocks = locks?.filter(lock =>
-    lock.file_path.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    lock.owner_id.toLowerCase().includes(searchTerm.toLowerCase())
+  const filteredLocks = locks?.filter(
+    (lock) =>
+      lock.file_path.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      lock.owner_id.toLowerCase().includes(searchTerm.toLowerCase()),
   );
 
   return (
-    <div className="h-full flex flex-col bg-background p-6 gap-4">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-foreground mb-2">文件锁定管理</h1>
-        <p className="text-default-500">管理文件锁定状态，防止并发编辑冲突</p>
+    <div className="page-shell page-flat" data-testid="locks-flat-layout">
+      <div className="page-header">
+        <h1 className="page-title">Lock Management</h1>
+        <p className="page-subtitle">Manage file locks and prevent editing conflicts.</p>
       </div>
 
-      {/* Toolbar */}
-      <div className="flex gap-3">
-        <Input
-          placeholder="输入文件路径进行锁定..."
-          value={filePath}
-          onChange={(e) => setFilePath(e.target.value)}
-          className="flex-1"
-        />
-        <Button
-          color="primary"
-          onClick={() => lockMutation.mutate(filePath)}
-          isDisabled={!filePath || lockMutation.isPending}
-          isLoading={lockMutation.isPending}
-          startContent={<Plus className="w-4 h-4" />}
-        >
-          锁定
-        </Button>
-      </div>
+      <section className="flat-section" data-testid="locks-actions-section">
+        <div className="flat-toolbar">
+          <Input
+            placeholder="Enter file path to lock"
+            value={filePath}
+            onChange={(e) => setFilePath(e.target.value)}
+            size="sm"
+            classNames={{
+              inputWrapper: 'bg-white border-gray-200',
+            }}
+          />
+          <Button
+            color="primary"
+            onClick={() => lockMutation.mutate(filePath)}
+            isDisabled={!filePath || lockMutation.isPending}
+            isLoading={lockMutation.isPending}
+            startContent={<Plus className="h-4 w-4" />}
+            className="shrink-0"
+          >
+            Lock
+          </Button>
+        </div>
+        <div className="mt-3">
+          <Input
+            placeholder="Search by file path or owner"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            size="sm"
+            startContent={<Search className="h-4 w-4 text-gray-400" />}
+            classNames={{
+              inputWrapper: 'bg-white border-gray-200',
+            }}
+          />
+        </div>
+      </section>
 
-      {/* Search */}
-      <Input
-        placeholder="搜索文件路径或所有者..."
-        value={searchTerm}
-        onChange={(e) => setSearchTerm(e.target.value)}
-        startContent={<Search className="w-4 h-4 text-default-400" />}
-      />
-
-      {/* Table */}
-      <div className="flex-1 overflow-auto">
+      <section className="flat-section flat-grow" data-testid="locks-table-section">
         <Table
-          aria-label="锁定文件列表"
+          aria-label="Locked file list"
+          removeWrapper
           classNames={{
-            wrapper: "h-full",
+            th: 'bg-transparent text-gray-700 font-semibold border-b border-black/10',
+            td: 'text-gray-900 border-b border-black/5',
           }}
         >
           <TableHeader>
-            <TableColumn>文件路径</TableColumn>
-            <TableColumn>锁定者</TableColumn>
-            <TableColumn>锁定时间</TableColumn>
-            <TableColumn align="end">操作</TableColumn>
+            <TableColumn>File Path</TableColumn>
+            <TableColumn>Owner</TableColumn>
+            <TableColumn>Locked At</TableColumn>
+            <TableColumn align="end">Actions</TableColumn>
           </TableHeader>
           <TableBody
             items={filteredLocks || []}
             isLoading={isLoading}
             loadingContent={<Spinner />}
-            emptyContent="暂无锁定的文件"
+            emptyContent={
+              <div className="flat-empty">
+                <Lock className="mx-auto mb-3 h-10 w-10 opacity-30" />
+                <p>No locked files.</p>
+              </div>
+            }
           >
             {(lock) => (
               <TableRow key={lock.file_path}>
                 <TableCell>
                   <div className="flex items-center gap-2">
-                    <Lock className="w-4 h-4 text-warning" />
-                    <code className="text-sm">{lock.file_path}</code>
+                    <Lock className="h-4 w-4 text-orange-500" />
+                    <code className="text-sm text-gray-700">{lock.file_path}</code>
                   </div>
                 </TableCell>
                 <TableCell>
-                  <Chip size="sm" variant="flat">
+                  <Chip size="sm" variant="flat" className="bg-gray-100 text-gray-700">
                     {lock.owner_id}
                   </Chip>
                 </TableCell>
                 <TableCell>
-                  <span className="text-sm text-default-500">
-                    {formatDate(lock.locked_at)}
-                  </span>
+                  <span className="text-sm text-gray-500">{formatDate(lock.locked_at)}</span>
                 </TableCell>
                 <TableCell>
                   <div className="flex items-center justify-end gap-2">
@@ -141,9 +154,9 @@ export function LocksPage() {
                         variant="flat"
                         onClick={() => unlockMutation.mutate(lock.file_path)}
                         isDisabled={unlockMutation.isPending}
-                        startContent={<Unlock className="w-3 h-3" />}
+                        startContent={<Unlock className="h-3 w-3" />}
                       >
-                        解锁
+                        Unlock
                       </Button>
                     )}
                     <Button
@@ -151,14 +164,14 @@ export function LocksPage() {
                       color="danger"
                       variant="flat"
                       onClick={() => {
-                        if (confirm(`确定要强制解锁 ${lock.file_path} 吗？`)) {
+                        if (confirm(`Force unlock ${lock.file_path}?`)) {
                           forceUnlockMutation.mutate(lock.file_path);
                         }
                       }}
                       isDisabled={forceUnlockMutation.isPending}
-                      startContent={<AlertCircle className="w-3 h-3" />}
+                      startContent={<AlertCircle className="h-3 w-3" />}
                     >
-                      强制
+                      Force
                     </Button>
                   </div>
                 </TableCell>
@@ -166,7 +179,7 @@ export function LocksPage() {
             )}
           </TableBody>
         </Table>
-      </div>
+      </section>
     </div>
   );
 }

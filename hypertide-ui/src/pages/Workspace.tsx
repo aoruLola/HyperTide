@@ -1,20 +1,19 @@
-import { useState } from 'react';
+﻿import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { Button, Divider, Input, ScrollShadow } from '@heroui/react';
 import {
-  Card,
-  CardBody,
-  Button,
-  Chip,
-  Divider,
-} from '@heroui/react';
-import { 
-  Folder, 
-  File, 
-  Lock, 
+  Folder,
+  File,
+  Lock,
   Upload as UploadIcon,
   Download,
   ChevronRight,
   ChevronDown,
+  Search,
+  FileText,
+  Image as ImageIcon,
+  Film,
+  Music,
 } from 'lucide-react';
 import { apiClient } from '../lib/api';
 import { formatBytes } from '../lib/utils';
@@ -30,9 +29,27 @@ interface FileNode {
   children?: FileNode[];
 }
 
+const getFileIcon = (filename: string) => {
+  const ext = filename.split('.').pop()?.toLowerCase();
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext || '')) {
+    return <ImageIcon className="h-4 w-4 text-blue-500" />;
+  }
+  if (['mp4', 'avi', 'mov', 'mkv'].includes(ext || '')) {
+    return <Film className="h-4 w-4 text-violet-500" />;
+  }
+  if (['mp3', 'wav', 'ogg', 'flac'].includes(ext || '')) {
+    return <Music className="h-4 w-4 text-pink-500" />;
+  }
+  if (['txt', 'md', 'json', 'xml'].includes(ext || '')) {
+    return <FileText className="h-4 w-4 text-emerald-500" />;
+  }
+  return <File className="h-4 w-4 text-gray-400" />;
+};
+
 export function Workspace() {
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['/']));
+  const [searchQuery, setSearchQuery] = useState('');
 
   const { data: locks } = useQuery({
     queryKey: ['locks'],
@@ -43,7 +60,6 @@ export function Workspace() {
     refetchInterval: 3000,
   });
 
-  // Mock file tree
   const fileTree: FileNode = {
     path: '/',
     name: 'Root',
@@ -69,6 +85,7 @@ export function Workspace() {
             type: 'folder',
             children: [
               { path: '/assets/textures/diffuse.png', name: 'diffuse.png', type: 'file', size: 4096000 },
+              { path: '/assets/textures/normal.png', name: 'normal.png', type: 'file', size: 3145728 },
             ],
           },
         ],
@@ -79,6 +96,7 @@ export function Workspace() {
         type: 'folder',
         children: [
           { path: '/scripts/main.lua', name: 'main.lua', type: 'file', size: 8192 },
+          { path: '/scripts/config.json', name: 'config.json', type: 'file', size: 2048 },
         ],
       },
     ],
@@ -95,152 +113,152 @@ export function Workspace() {
   };
 
   const isLocked = (path: string) => {
-    return locks?.some(lock => lock.file_path === path);
+    return locks?.some((lock) => lock.file_path === path);
   };
 
   const getLockedBy = (path: string) => {
-    return locks?.find(lock => lock.file_path === path)?.owner_id;
+    return locks?.find((lock) => lock.file_path === path)?.owner_id;
   };
 
   const renderTree = (node: FileNode, level: number = 0) => {
     const isExpanded = expandedFolders.has(node.path);
     const locked = isLocked(node.path);
-    const lockedBy = getLockedBy(node.path);
+    const isSelected = selectedFile?.path === node.path;
+
+    if (searchQuery && !node.name.toLowerCase().includes(searchQuery.toLowerCase())) {
+      return null;
+    }
 
     return (
       <div key={node.path}>
         <div
-          className={`flex items-center gap-2 px-2 py-1.5 hover:bg-default-100 cursor-pointer rounded-md ${
-            selectedFile?.path === node.path ? 'bg-default-100' : ''
+          className={`group relative flex cursor-pointer items-center gap-2 rounded-lg px-3 py-1.5 transition-all duration-150 ${
+            isSelected ? 'bg-teal-100/70 text-gray-950 font-semibold' : 'text-gray-600 hover:bg-white/70'
           }`}
-          style={{ paddingLeft: `${level * 16 + 8}px` }}
+          style={{ paddingLeft: `${level * 16 + 12}px` }}
           onClick={() => {
-            if (node.type === 'folder') {
-              toggleFolder(node.path);
-            }
+            if (node.type === 'folder') toggleFolder(node.path);
             setSelectedFile(node);
           }}
         >
+          {isSelected && <div className="absolute bottom-1 top-1 left-1 w-[3px] rounded-full bg-teal-600" />}
+
           {node.type === 'folder' && (
-            <button onClick={(e) => { e.stopPropagation(); toggleFolder(node.path); }}>
-              {isExpanded ? (
-                <ChevronDown className="w-4 h-4 text-default-400" />
-              ) : (
-                <ChevronRight className="w-4 h-4 text-default-400" />
-              )}
-            </button>
+            <div
+              className={`rounded p-0.5 transition-colors ${
+                isSelected ? 'text-gray-900' : 'text-gray-400 hover:text-gray-600'
+              }`}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleFolder(node.path);
+              }}
+            >
+              {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+            </div>
           )}
-          {node.type === 'folder' ? (
-            <Folder className="w-4 h-4 text-primary" />
-          ) : (
-            <File className="w-4 h-4 text-default-400" />
-          )}
-          <span className="text-sm flex-1">{node.name}</span>
-          {locked && <Lock className="w-3 h-3 text-warning" title={`锁定者: ${lockedBy}`} />}
+
+          <span className="shrink-0">
+            {node.type === 'folder' ? (
+              <Folder className={`h-4 w-4 ${isSelected ? 'text-teal-700' : 'text-teal-500'}`} />
+            ) : (
+              getFileIcon(node.name)
+            )}
+          </span>
+
+          <span className="truncate text-[13px] tracking-tight">{node.name}</span>
+
+          {locked && <Lock className="ml-auto h-3 w-3 text-amber-500/80" />}
         </div>
-        {node.type === 'folder' && isExpanded && node.children?.map(child => renderTree(child, level + 1))}
+        {node.type === 'folder' && isExpanded && (
+          <div className="mt-0.5">{node.children?.map((child) => renderTree(child, level + 1))}</div>
+        )}
       </div>
     );
   };
 
   return (
-    <div className="h-full flex bg-background">
-      {/* Left: File Tree */}
-      <div className="w-80 border-r border-divider overflow-y-auto p-4">
-        <h2 className="text-sm font-semibold mb-3">文件树</h2>
-        <div>
-          {renderTree(fileTree)}
-        </div>
+    <div className="page-shell page-flat">
+      <div className="page-header">
+        <h1 className="page-title">Workspace</h1>
+        <p className="page-subtitle">Browse assets and inspect metadata.</p>
       </div>
 
-      {/* Right: File Details */}
-      <div className="flex-1 p-6">
-        {selectedFile ? (
-          <div className="max-w-2xl">
-            <Card>
-              <CardBody className="gap-4">
-                {/* Header */}
-                <div className="flex items-center gap-3">
-                  {selectedFile.type === 'folder' ? (
-                    <Folder className="w-8 h-8 text-primary" />
-                  ) : (
-                    <File className="w-8 h-8 text-default-400" />
-                  )}
-                  <div className="flex-1">
-                    <h2 className="text-xl font-semibold">{selectedFile.name}</h2>
-                    <p className="text-sm text-default-500">{selectedFile.path}</p>
+      <section className="flat-section flat-grow">
+        <div className="workspace-flat-grid">
+          <div className="workspace-tree-pane">
+            <Input
+              placeholder="Search assets"
+              size="sm"
+              variant="flat"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              startContent={<Search className="h-3.5 w-3.5 text-gray-400" />}
+              classNames={{
+                inputWrapper: 'border border-black/[0.08] bg-white',
+              }}
+            />
+            <ScrollShadow className="workspace-tree-scroll mt-3">{renderTree(fileTree)}</ScrollShadow>
+          </div>
+
+          <div className="workspace-detail-pane">
+            {selectedFile ? (
+              <div className="h-full overflow-auto">
+                <div className="workspace-file-head">
+                  <div className="workspace-file-icon">
+                    {selectedFile.type === 'folder' ? (
+                      <Folder className="h-8 w-8 text-teal-600/85" />
+                    ) : (
+                      <div className="scale-[1.4]">{getFileIcon(selectedFile.name)}</div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h2 className="text-lg font-bold text-gray-900">{selectedFile.name}</h2>
+                    <div className="mt-1 flex items-center gap-2 text-[11px] font-medium text-gray-500">
+                      <span className="uppercase tracking-widest">{selectedFile.type}</span>
+                      <Divider orientation="vertical" className="h-2 bg-gray-200" />
+                      <code className="truncate">{selectedFile.path}</code>
+                    </div>
                   </div>
                 </div>
 
                 {selectedFile.type === 'file' && (
-                  <>
-                    <Divider />
-                    
-                    {/* File Info */}
-                    <div className="space-y-2">
-                      <h3 className="text-sm font-semibold">文件信息</h3>
-                      {selectedFile.size && (
-                        <div className="flex justify-between text-sm">
-                          <span className="text-default-500">大小</span>
-                          <span>{formatBytes(selectedFile.size)}</span>
-                        </div>
-                      )}
-                      <div className="flex justify-between text-sm">
-                        <span className="text-default-500">状态</span>
-                        {isLocked(selectedFile.path) ? (
-                          <Chip size="sm" color="warning" variant="flat">
-                            已锁定 ({getLockedBy(selectedFile.path)})
-                          </Chip>
-                        ) : (
-                          <Chip size="sm" color="success" variant="flat">
-                            可用
-                          </Chip>
-                        )}
-                      </div>
+                  <div className="workspace-metrics">
+                    <div className="workspace-metric-row">
+                      <span className="workspace-metric-label">File Size</span>
+                      <span className="workspace-metric-value">{formatBytes(selectedFile.size || 0)}</span>
                     </div>
-
-                    <Divider />
-
-                    {/* Actions */}
-                    <div className="space-y-2">
-                      <h3 className="text-sm font-semibold mb-2">操作</h3>
-                      <Button
-                        fullWidth
-                        color="primary"
-                        variant="flat"
-                        startContent={<Lock className="w-4 h-4" />}
-                      >
-                        锁定文件
-                      </Button>
-                      <Button
-                        fullWidth
-                        variant="flat"
-                        startContent={<Download className="w-4 h-4" />}
-                      >
-                        下载文件
-                      </Button>
-                      <Button
-                        fullWidth
-                        variant="flat"
-                        startContent={<UploadIcon className="w-4 h-4" />}
-                      >
-                        上传新版本
-                      </Button>
+                    <div className="workspace-metric-row">
+                      <span className="workspace-metric-label">Status</span>
+                      <span className="workspace-metric-value">
+                        {isLocked(selectedFile.path)
+                          ? `Locked by ${getLockedBy(selectedFile.path)}`
+                          : 'Available'}
+                      </span>
                     </div>
-                  </>
+                  </div>
                 )}
-              </CardBody>
-            </Card>
+
+                <div className="mt-5 flex flex-wrap gap-2">
+                  <Button color="primary" className="rounded-md px-5 font-semibold" startContent={<Lock className="h-4 w-4" />}>
+                    Acquire Lock
+                  </Button>
+                  <Button variant="bordered" className="rounded-md px-5" startContent={<Download className="h-4 w-4" />}>
+                    Download
+                  </Button>
+                  <Button variant="light" className="rounded-md px-5 text-gray-600" startContent={<UploadIcon className="h-4 w-4" />}>
+                    Upload Revision
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flat-empty h-full">
+                <Folder className="mx-auto mb-3 h-10 w-10 opacity-30" />
+                <p>Select an item to view properties.</p>
+              </div>
+            )}
           </div>
-        ) : (
-          <div className="h-full flex items-center justify-center">
-            <div className="text-center text-default-400">
-              <Folder className="w-16 h-16 mx-auto mb-4 opacity-50" />
-              <p>从左侧选择一个文件或文件夹</p>
-            </div>
-          </div>
-        )}
-      </div>
+        </div>
+      </section>
     </div>
   );
 }
