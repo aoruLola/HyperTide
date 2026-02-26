@@ -24,7 +24,7 @@ use crate::api::manifests::create_manifest;
 use crate::api::storage::{calculate_hash, check_exists, download_file, upload_file};
 use crate::api::trust::{
     attest_checkpoint, export_audit_entries, generate_checkpoint, latest_checkpoint,
-    replay_readiness, verify_audit_chain, verify_replay, witness_summary,
+    replay_readiness, retention_policy, verify_audit_chain, verify_replay, witness_summary,
 };
 use crate::api::versioning::{
     approve_changeset, changeset_gate, create_branch, list_branches, list_history,
@@ -33,6 +33,7 @@ use crate::api::versioning::{
 use crate::core::auth::AuthManager;
 use crate::core::audit_chain::AuditChain;
 use crate::core::checkpoint::CheckpointService;
+use crate::core::compliance::RetentionPolicy;
 use crate::core::db::{migrations::run_migrations, pool::init_pg_pool_from_env};
 use crate::core::events::EventStore;
 use crate::core::high_risk::HighRiskGuard;
@@ -66,6 +67,7 @@ pub struct AppState {
     pub witness_service: Option<WitnessService>,
     pub high_risk_guard: Option<HighRiskGuard>,
     pub replay_service: Option<ReplayService>,
+    pub retention_policy: RetentionPolicy,
     pub db_pool: Option<PgPool>,
 }
 
@@ -147,6 +149,7 @@ fn build_app(state: AppState) -> Router {
         .route("/v2/trust/witness/summary", get(witness_summary))
         .route("/v2/trust/audit/verify", post(verify_audit_chain))
         .route("/v2/trust/audit/export", get(export_audit_entries))
+        .route("/v2/trust/retention/policy", get(retention_policy))
         .route("/v2/trust/replay/verify", post(verify_replay))
         .route("/v2/trust/replay/readiness", get(replay_readiness))
         .layer(cors)
@@ -222,6 +225,7 @@ async fn main() {
         witness_service: Some(WitnessService::from_env(db_pool.clone())),
         high_risk_guard: Some(HighRiskGuard::from_env(db_pool.clone())),
         replay_service: Some(ReplayService::new(db_pool.clone())),
+        retention_policy: RetentionPolicy::from_env(),
         db_pool: Some(db_pool),
     };
 
@@ -287,6 +291,7 @@ mod tests {
             witness_service: None,
             high_risk_guard: None,
             replay_service: None,
+            retention_policy: RetentionPolicy::from_env(),
             db_pool: None,
         }
     }
@@ -449,5 +454,32 @@ mod tests {
 
         let response = app.oneshot(request).await.expect("response");
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn retention_policy_rejects_missing_api_key() {
+        let app = build_app(test_state());
+
+        let request = Request::builder()
+            .uri("/v2/trust/retention/policy")
+            .body(Body::empty())
+            .expect("request");
+
+        let response = app.oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn retention_policy_returns_ok_with_admin_key() {
+        let app = build_app(test_state());
+
+        let request = Request::builder()
+            .uri("/v2/trust/retention/policy")
+            .header("X-API-Key", DEV_MASTER_KEY)
+            .body(Body::empty())
+            .expect("request");
+
+        let response = app.oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

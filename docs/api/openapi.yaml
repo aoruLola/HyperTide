@@ -361,6 +361,14 @@ paths:
         - BearerAuth: []
       responses:
         '200': { description: Audit entries exported }
+  /v2/trust/retention/policy:
+    get:
+      summary: Get retention policy configuration
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Retention policy }
   /v2/trust/replay/verify:
     post:
       summary: Verify event replay consistency against current state

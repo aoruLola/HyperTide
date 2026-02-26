@@ -10,6 +10,7 @@ use crate::core::{
     audit_chain::{AuditChainEntry, AuditVerifyResult},
     auth::Permission,
     checkpoint::CheckpointRecord,
+    compliance::RetentionPolicy,
     replay::{ReplayReadinessReport, ReplayVerification},
     witness::{WitnessReceipt, WitnessSummary},
 };
@@ -248,4 +249,15 @@ pub async fn export_audit_entries(
             Json(ApiResponse::err(format!("failed to export audit entries: {error}"))),
         ),
     }
+}
+
+pub async fn retention_policy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<ApiResponse<RetentionPolicy>>) {
+    if let Err((status, message)) = require_permission(&state, &headers, Permission::Admin).await {
+        return (status, Json(ApiResponse::err(message)));
+    }
+
+    (StatusCode::OK, Json(ApiResponse::ok(state.retention_policy.clone())))
 }
