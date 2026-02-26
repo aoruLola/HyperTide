@@ -10,14 +10,18 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@heroui/react": "^2.8.9",
     "@tanstack/react-query": "^5.90.21",
+    "@tanstack/react-table": "^8.21.3",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "axios": "^1.13.5",
     "clsx": "^2.1.1",
+    "framer-motion": "^12.34.3",
     "lucide-react": "^0.575.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "react-router-dom": "^7.13.1",
     "tailwind-merge": "^3.5.0",
     "zustand": "^5.0.11"
   },

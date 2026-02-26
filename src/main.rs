@@ -137,7 +137,7 @@ async fn main() {
         lock_manager,
         storage_manager,
         auth_manager,
-        version_manager: VersionManager::new(),
+        version_manager: VersionManager::with_persistence("./storage/versioning/repos.json"),
     };
 
     // CORS configuration (allow all for development)

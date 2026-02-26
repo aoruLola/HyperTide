@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use chrono::{DateTime, Utc};
@@ -119,12 +120,34 @@ pub enum VersioningError {
 #[derive(Clone)]
 pub struct VersionManager {
     repos: Arc<RwLock<HashMap<String, RepoState>>>,
+    persistence_path: Option<PathBuf>,
 }
 
 impl VersionManager {
     pub fn new() -> Self {
         Self {
             repos: Arc::new(RwLock::new(HashMap::new())),
+            persistence_path: None,
+        }
+    }
+
+    pub fn with_persistence(path: impl AsRef<Path>) -> Self {
+        let persistence_path = path.as_ref().to_path_buf();
+        let repos = match Self::load_repos(&persistence_path) {
+            Ok(repos) => repos,
+            Err(error) => {
+                tracing::warn!(
+                    "versioning persistence load failed at {}: {}",
+                    persistence_path.display(),
+                    error
+                );
+                HashMap::new()
+            }
+        };
+
+        Self {
+            repos: Arc::new(RwLock::new(repos)),
+            persistence_path: Some(persistence_path),
         }
     }
 
@@ -136,55 +159,63 @@ impl VersionManager {
         created_by: &str,
     ) -> Result<BranchRecord, VersioningError> {
         let mut repos = self.repos.write().expect("versioning lock poisoned");
-        let repo = repos
-            .entry(repo_id.to_string())
-            .or_insert_with(|| RepoState::new(created_by));
-        repo.ensure_default_branch(created_by);
+        let record = {
+            let repo = repos
+                .entry(repo_id.to_string())
+                .or_insert_with(|| RepoState::new(created_by));
+            repo.ensure_default_branch(created_by);
 
-        if repo.branches.contains_key(branch) {
-            return Err(VersioningError::BranchAlreadyExists {
-                repo_id: repo_id.to_string(),
-                branch: branch.to_string(),
-            });
-        }
-
-        let head = if let Some(id) = from_changeset_id {
-            if !repo.changesets.contains_key(id) {
-                return Err(VersioningError::ChangesetNotFound {
+            if repo.branches.contains_key(branch) {
+                return Err(VersioningError::BranchAlreadyExists {
                     repo_id: repo_id.to_string(),
-                    changeset_id: id.to_string(),
+                    branch: branch.to_string(),
                 });
             }
-            Some(id.to_string())
-        } else {
-            repo.default_head()
+
+            let head = if let Some(id) = from_changeset_id {
+                if !repo.changesets.contains_key(id) {
+                    return Err(VersioningError::ChangesetNotFound {
+                        repo_id: repo_id.to_string(),
+                        changeset_id: id.to_string(),
+                    });
+                }
+                Some(id.to_string())
+            } else {
+                repo.default_head()
+            };
+
+            let history = if let Some(ref head_id) = head {
+                repo.lineage_to(head_id)
+                    .ok_or_else(|| VersioningError::ChangesetNotFound {
+                        repo_id: repo_id.to_string(),
+                        changeset_id: head_id.clone(),
+                    })?
+            } else {
+                Vec::new()
+            };
+
+            let record = BranchRecord {
+                name: branch.to_string(),
+                created_by: created_by.to_string(),
+                created_at: Utc::now(),
+                is_default: false,
+                head_changeset_id: head.clone(),
+            };
+
+            repo.branches.insert(
+                branch.to_string(),
+                BranchState {
+                    record: record.clone(),
+                    history,
+                },
+            );
+
+            record
         };
 
-        let history = if let Some(ref head_id) = head {
-            repo.lineage_to(head_id)
-                .ok_or_else(|| VersioningError::ChangesetNotFound {
-                    repo_id: repo_id.to_string(),
-                    changeset_id: head_id.clone(),
-                })?
-        } else {
-            Vec::new()
-        };
-
-        let record = BranchRecord {
-            name: branch.to_string(),
-            created_by: created_by.to_string(),
-            created_at: Utc::now(),
-            is_default: false,
-            head_changeset_id: head.clone(),
-        };
-
-        repo.branches.insert(
-            branch.to_string(),
-            BranchState {
-                record: record.clone(),
-                history,
-            },
-        );
+        let snapshot = repos.clone();
+        drop(repos);
+        self.persist_repos(&snapshot);
 
         Ok(record)
     }
@@ -212,7 +243,13 @@ impl VersionManager {
             .entry(input.repo_id.clone())
             .or_insert_with(|| RepoState::new(&input.author));
         repo.ensure_default_branch(&input.author);
-        Self::submit_internal(repo, input)
+        let result = Self::submit_internal(repo, input);
+        if result.is_ok() {
+            let snapshot = repos.clone();
+            drop(repos);
+            self.persist_repos(&snapshot);
+        }
+        result
     }
 
     pub fn history(
@@ -468,6 +505,61 @@ impl VersionManager {
 
         Ok(record)
     }
+
+    fn load_repos(path: &Path) -> Result<HashMap<String, RepoState>, String> {
+        if !path.exists() {
+            return Ok(HashMap::new());
+        }
+
+        let bytes = std::fs::read(path)
+            .map_err(|error| format!("failed to read state file {}: {error}", path.display()))?;
+        serde_json::from_slice::<HashMap<String, RepoState>>(&bytes)
+            .map_err(|error| format!("failed to parse state file {}: {error}", path.display()))
+    }
+
+    fn persist_repos(&self, repos: &HashMap<String, RepoState>) {
+        let Some(path) = self.persistence_path.as_ref() else {
+            return;
+        };
+
+        if let Some(parent) = path.parent() {
+            if let Err(error) = std::fs::create_dir_all(parent) {
+                tracing::error!(
+                    "failed to create versioning state dir {}: {}",
+                    parent.display(),
+                    error
+                );
+                return;
+            }
+        }
+
+        let payload = match serde_json::to_vec_pretty(repos) {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::error!("failed to serialize versioning state: {}", error);
+                return;
+            }
+        };
+
+        let temp_path = path.with_extension("tmp");
+        if let Err(error) = std::fs::write(&temp_path, payload) {
+            tracing::error!(
+                "failed to write versioning temp state {}: {}",
+                temp_path.display(),
+                error
+            );
+            return;
+        }
+
+        if let Err(error) = std::fs::rename(&temp_path, path) {
+            let _ = std::fs::remove_file(&temp_path);
+            tracing::error!(
+                "failed to atomically replace versioning state {}: {}",
+                path.display(),
+                error
+            );
+        }
+    }
 }
 
 impl Default for VersionManager {
@@ -476,13 +568,13 @@ impl Default for VersionManager {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct BranchState {
     record: BranchRecord,
     history: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct RepoState {
     default_branch: String,
     branches: HashMap<String, BranchState>,
@@ -689,5 +781,40 @@ mod tests {
             .sync_snapshot("repo-c", "main", None)
             .expect("snapshot");
         assert_eq!(sync.assets[0].blob_hash, "h1");
+    }
+
+    #[test]
+    fn persists_state_across_manager_restarts() {
+        let state_file = std::env::temp_dir().join(format!(
+            "hypertide-versioning-{}.json",
+            Uuid::new_v4()
+        ));
+
+        let first_manager = VersionManager::with_persistence(&state_file);
+        first_manager
+            .submit_changeset(SubmitChangesetInput {
+                repo_id: "repo-p".to_string(),
+                branch: "main".to_string(),
+                base_changeset_id: Some(ROOT_BASE_CHANGESET_ID.to_string()),
+                kind: ChangesetKind::Normal,
+                rollback_of: None,
+                author: "alice".to_string(),
+                message: "first".to_string(),
+                assets: vec![AssetDelta {
+                    path: "env/config.json".to_string(),
+                    blob_hash: Some("blob-v1".to_string()),
+                }],
+            })
+            .expect("submit should persist");
+
+        let second_manager = VersionManager::with_persistence(&state_file);
+        let snapshot = second_manager
+            .sync_snapshot("repo-p", "main", None)
+            .expect("snapshot should load from persistence");
+        assert_eq!(snapshot.assets.len(), 1);
+        assert_eq!(snapshot.assets[0].path, "env/config.json");
+        assert_eq!(snapshot.assets[0].blob_hash, "blob-v1");
+
+        let _ = std::fs::remove_file(state_file);
     }
 }
