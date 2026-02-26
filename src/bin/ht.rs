@@ -1,8 +1,10 @@
 ﻿use std::fs;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
+use blake3::Hasher;
 use clap::{Args, Parser, Subcommand};
 use reqwest::{RequestBuilder, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -25,6 +27,7 @@ enum Command {
     Log(LogArgs),
     Rollback(RollbackArgs),
     Sync(SyncArgs),
+    ChunkUpload(ChunkUploadArgs),
 }
 
 #[derive(Debug, Args)]
@@ -130,6 +133,16 @@ struct SyncArgs {
     branch: Option<String>,
     #[arg(long = "to")]
     to_changeset_id: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct ChunkUploadArgs {
+    #[arg(long)]
+    file: String,
+    #[arg(long, default_value_t = 4 * 1024 * 1024)]
+    chunk_size: usize,
+    #[arg(long, default_value = "fixed-4m")]
+    chunk_size_policy: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -276,6 +289,39 @@ struct RollbackRequest<'a> {
     message: Option<&'a str>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct MissingChunksRequest<'a> {
+    chunk_hashes: &'a [String],
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct MissingChunksResponse {
+    missing: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ManifestChunk {
+    i: usize,
+    chunk_hash: String,
+    size: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CreateManifestRequest<'a> {
+    version: u32,
+    chunk_size_policy: &'a str,
+    chunks: &'a [ManifestChunk],
+    file_meta: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CreateManifestResponse {
+    manifest_hash: String,
+    merkle_root: String,
+    chunk_count: usize,
+    created: bool,
+}
+
 #[derive(Debug, Serialize)]
 struct ExchangeKeyRequest<'a> {
     api_key: &'a str,
@@ -297,6 +343,7 @@ async fn main() -> Result<()> {
         Command::Log(args) => show_log(args).await,
         Command::Rollback(args) => rollback(args).await,
         Command::Sync(args) => sync(args).await,
+        Command::ChunkUpload(args) => chunk_upload(args).await,
     }
 }
 
@@ -733,6 +780,139 @@ async fn exchange_api_key_for_tokens(client: &reqwest::Client, profile: &mut Cli
         .data
         .context("missing token pair in exchange-key response")?;
     apply_token_pair(profile, token_pair);
+    Ok(())
+}
+
+async fn chunk_upload(args: ChunkUploadArgs) -> Result<()> {
+    let mut profile = load_profile()?;
+    let client = reqwest::Client::new();
+    let file_path = PathBuf::from(&args.file);
+    let file_name = file_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("asset.bin")
+        .to_string();
+    let bytes = fs::read(&file_path)
+        .with_context(|| format!("failed to read file {}", file_path.display()))?;
+
+    if bytes.is_empty() {
+        return Err(anyhow!("file is empty"));
+    }
+    let chunk_size = args.chunk_size.max(64 * 1024);
+    let mut chunks = Vec::new();
+    let mut cursor = 0usize;
+    let mut index = 0usize;
+    while cursor < bytes.len() {
+        let end = (cursor + chunk_size).min(bytes.len());
+        let mut hasher = Hasher::new();
+        hasher.update(&bytes[cursor..end]);
+        chunks.push(ManifestChunk {
+            i: index,
+            chunk_hash: hasher.finalize().to_hex().to_string(),
+            size: end - cursor,
+        });
+        cursor = end;
+        index += 1;
+    }
+
+    let hash_list = chunks
+        .iter()
+        .map(|chunk| chunk.chunk_hash.clone())
+        .collect::<Vec<_>>();
+    let missing_url = format!("{}/v2/blobs/missing", profile.server.trim_end_matches('/'));
+    let missing_resp: ApiResponse<MissingChunksResponse> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| {
+            with_auth(
+                client.post(&missing_url).json(&MissingChunksRequest {
+                    chunk_hashes: &hash_list,
+                }),
+                profile,
+            )
+        },
+        "missing-chunk response decode failed",
+    )
+    .await?;
+    if !missing_resp.success {
+        return Err(anyhow!(api_error_message(
+            &missing_resp,
+            "query missing chunks failed"
+        )));
+    }
+
+    let missing = missing_resp
+        .data
+        .context("missing missing-chunk response data")?
+        .missing
+        .into_iter()
+        .collect::<HashSet<_>>();
+
+    cursor = 0usize;
+    let mut uploaded = 0usize;
+    for chunk in &chunks {
+        let end = (cursor + chunk.size).min(bytes.len());
+        if missing.contains(&chunk.chunk_hash) {
+            let upload_url = format!(
+                "{}/v2/blobs/chunks/{}",
+                profile.server.trim_end_matches('/'),
+                chunk.chunk_hash
+            );
+            let payload = bytes[cursor..end].to_vec();
+            let upload_resp: ApiResponse<serde_json::Value> = send_authed_api(
+                &client,
+                &mut profile,
+                move |client, profile| with_auth(client.put(&upload_url).body(payload.clone()), profile),
+                "chunk upload response decode failed",
+            )
+            .await?;
+            if !upload_resp.success {
+                return Err(anyhow!(api_error_message(
+                    &upload_resp,
+                    "chunk upload failed"
+                )));
+            }
+            uploaded += 1;
+        }
+        cursor = end;
+    }
+
+    let manifest_url = format!("{}/v2/manifests", profile.server.trim_end_matches('/'));
+    let manifest_req = CreateManifestRequest {
+        version: 1,
+        chunk_size_policy: &args.chunk_size_policy,
+        chunks: &chunks,
+        file_meta: serde_json::json!({
+            "path": args.file,
+            "name": file_name,
+            "size": bytes.len(),
+        }),
+    };
+    let manifest_resp: ApiResponse<CreateManifestResponse> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| with_auth(client.post(&manifest_url).json(&manifest_req), profile),
+        "manifest response decode failed",
+    )
+    .await?;
+    if !manifest_resp.success {
+        return Err(anyhow!(api_error_message(
+            &manifest_resp,
+            "manifest create failed"
+        )));
+    }
+    let manifest = manifest_resp
+        .data
+        .context("missing manifest response data")?;
+
+    println!(
+        "chunk-upload done: chunks={} uploaded={} manifest={} merkle={} created={}",
+        manifest.chunk_count,
+        uploaded,
+        manifest.manifest_hash,
+        manifest.merkle_root,
+        manifest.created
+    );
     Ok(())
 }
 
