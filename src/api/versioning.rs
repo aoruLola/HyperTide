@@ -9,7 +9,7 @@ use crate::api::common::ApiResponse;
 use crate::api::middleware::authz;
 use crate::core::auth::{AuthIdentity, Permission};
 use crate::core::versioning::{
-    AssetDelta, BranchRecord, ChangesetKind, ChangesetRecord, HistoryPage, SnapshotEntry,
+    AssetDelta, BranchRecord, ChangesetKind, ChangesetRecord, ChangesetVisibility, HistoryPage, SnapshotEntry,
     SubmitChangesetInput, SyncSnapshot, VersioningError, ROOT_BASE_CHANGESET_ID,
 };
 use crate::AppState;
@@ -33,6 +33,7 @@ pub struct SubmitChangesetRequest {
     pub branch: Option<String>,
     pub base_changeset_id: Option<String>,
     pub kind: Option<String>,
+    pub visibility: Option<String>,
     pub rollback_of: Option<String>,
     pub author: String,
     pub message: String,
@@ -74,6 +75,11 @@ pub struct SyncQuery {
     pub to_changeset_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ChangesetActionQuery {
+    pub repo_id: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SyncResponse {
     pub repo_id: String,
@@ -95,6 +101,14 @@ fn parse_kind(value: Option<&str>) -> Result<ChangesetKind, String> {
         "normal" => Ok(ChangesetKind::Normal),
         "rollback" => Ok(ChangesetKind::Rollback),
         _ => Err("kind must be normal|rollback".to_string()),
+    }
+}
+
+fn parse_visibility(value: Option<&str>) -> Result<ChangesetVisibility, String> {
+    match value.unwrap_or("visible").to_ascii_lowercase().as_str() {
+        "visible" => Ok(ChangesetVisibility::Visible),
+        "draft" => Ok(ChangesetVisibility::Draft),
+        _ => Err("visibility must be visible|draft".to_string()),
     }
 }
 
@@ -140,6 +154,17 @@ fn map_versioning_error(error: VersioningError) -> (StatusCode, String) {
         } => (
             StatusCode::CONFLICT,
             format!("Rollback target invalid: {repo_id}/{branch}/{target_changeset_id}"),
+        ),
+        VersioningError::InvalidChangesetState {
+            repo_id,
+            changeset_id,
+            status,
+            expected,
+        } => (
+            StatusCode::CONFLICT,
+            format!(
+                "Changeset state invalid: repo={repo_id}, changeset={changeset_id}, status={status:?}, expected={expected}"
+            ),
         ),
     }
 }
@@ -242,6 +267,10 @@ pub async fn submit_changeset(
         Ok(kind) => kind,
         Err(message) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::err(message))),
     };
+    let visibility = match parse_visibility(payload.visibility.as_deref()) {
+        Ok(visibility) => visibility,
+        Err(message) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::err(message))),
+    };
 
     if payload.author != identity.owner_id {
         return (
@@ -265,6 +294,7 @@ pub async fn submit_changeset(
         rollback_of: payload.rollback_of,
         author: payload.author,
         message: payload.message,
+        visibility,
         assets: payload.assets,
     };
 
@@ -350,6 +380,7 @@ pub async fn rollback(
         rollback_of: Some(plan.target_changeset_id.clone()),
         author: payload.author,
         message,
+        visibility: ChangesetVisibility::Visible,
         assets: plan.assets.clone(),
     };
 
@@ -365,6 +396,56 @@ pub async fn rollback(
                 changeset,
             })),
         ),
+        Err(error) => {
+            let (status, message) = map_versioning_error(error);
+            (status, Json(ApiResponse::err(message)))
+        }
+    }
+}
+
+/// POST /v2/changesets/{changeset_id}/approve
+pub async fn approve_changeset(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(changeset_id): Path<String>,
+    Query(query): Query<ChangesetActionQuery>,
+) -> (StatusCode, Json<ApiResponse<ChangesetRecord>>) {
+    let identity = match require_key(&state, &headers, Permission::Upload).await {
+        Ok(key) => key,
+        Err((status, message)) => return (status, Json(ApiResponse::err(message))),
+    };
+
+    match state
+        .version_manager
+        .approve_changeset(&query.repo_id, &changeset_id, &identity.owner_id)
+        .await
+    {
+        Ok(changeset) => (StatusCode::OK, Json(ApiResponse::ok(changeset))),
+        Err(error) => {
+            let (status, message) = map_versioning_error(error);
+            (status, Json(ApiResponse::err(message)))
+        }
+    }
+}
+
+/// POST /v2/changesets/{changeset_id}/promote
+pub async fn promote_changeset(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(changeset_id): Path<String>,
+    Query(query): Query<ChangesetActionQuery>,
+) -> (StatusCode, Json<ApiResponse<ChangesetRecord>>) {
+    let identity = match require_key(&state, &headers, Permission::Upload).await {
+        Ok(key) => key,
+        Err((status, message)) => return (status, Json(ApiResponse::err(message))),
+    };
+
+    match state
+        .version_manager
+        .promote_changeset(&query.repo_id, &changeset_id, &identity.owner_id)
+        .await
+    {
+        Ok(changeset) => (StatusCode::OK, Json(ApiResponse::ok(changeset))),
         Err(error) => {
             let (status, message) = map_versioning_error(error);
             (status, Json(ApiResponse::err(message)))

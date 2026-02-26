@@ -23,7 +23,8 @@ use crate::api::lock::{force_unlock_file, list_locks, lock_file, renew_lock_file
 use crate::api::manifests::create_manifest;
 use crate::api::storage::{calculate_hash, check_exists, download_file, upload_file};
 use crate::api::versioning::{
-    create_branch, list_branches, list_history, rollback, submit_changeset, sync_snapshot,
+    approve_changeset, create_branch, list_branches, list_history, promote_changeset, rollback,
+    submit_changeset, sync_snapshot,
 };
 use crate::core::auth::AuthManager;
 use crate::core::db::{migrations::run_migrations, pool::init_pg_pool_from_env};
@@ -109,6 +110,8 @@ fn build_app(state: AppState) -> Router {
         .route("/v2/branches", post(create_branch))
         .route("/v2/branches/:repo_id", get(list_branches))
         .route("/v2/changesets", post(submit_changeset))
+        .route("/v2/changesets/:changeset_id/approve", post(approve_changeset))
+        .route("/v2/changesets/:changeset_id/promote", post(promote_changeset))
         .route("/v2/history/:repo_id", get(list_history))
         .route("/v2/rollback", post(rollback))
         .route("/v2/sync/:repo_id", get(sync_snapshot))

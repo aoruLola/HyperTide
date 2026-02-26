@@ -4,7 +4,8 @@ use chrono::{DateTime, Utc};
 use sqlx::{FromRow, PgPool};
 
 use crate::core::versioning::{
-    AssetDelta, BranchRecord, BranchState, ChangesetKind, ChangesetRecord, RepoState,
+    AssetDelta, BranchRecord, BranchState, ChangesetKind, ChangesetRecord, ChangesetStatus,
+    RepoState,
     SnapshotAsset,
 };
 
@@ -40,6 +41,10 @@ struct ChangesetRow {
     author: String,
     message: String,
     created_at: DateTime<Utc>,
+    status: String,
+    approved_by: Option<String>,
+    approved_at: Option<DateTime<Utc>>,
+    promoted_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, FromRow)]
@@ -125,7 +130,7 @@ impl VersionRepoPg {
 
             let changeset_rows = sqlx::query_as::<_, ChangesetRow>(
                 r#"
-                SELECT changeset_id, repo_id, branch_name, parent_changeset_id, base_changeset_id, kind, rollback_of, author, message, created_at
+                SELECT changeset_id, repo_id, branch_name, parent_changeset_id, base_changeset_id, kind, rollback_of, author, message, created_at, status, approved_by, approved_at, promoted_at
                 FROM changesets
                 WHERE repo_id = $1
                 ORDER BY created_at ASC
@@ -149,6 +154,10 @@ impl VersionRepoPg {
                         author: row.author,
                         message: row.message,
                         created_at: row.created_at,
+                        status: parse_status(&row.status),
+                        approved_by: row.approved_by,
+                        approved_at: row.approved_at,
+                        promoted_at: row.promoted_at,
                         assets: Vec::new(),
                     },
                 );
@@ -264,8 +273,10 @@ impl VersionRepoPg {
         for changeset in repo.changesets.values() {
             sqlx::query(
                 r#"
-                INSERT INTO changesets (changeset_id, repo_id, branch_name, parent_changeset_id, base_changeset_id, kind, rollback_of, author, message, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                INSERT INTO changesets (
+                    changeset_id, repo_id, branch_name, parent_changeset_id, base_changeset_id, kind, rollback_of, author, message, created_at, status, approved_by, approved_at, promoted_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                 "#,
             )
             .bind(&changeset.changeset_id)
@@ -278,6 +289,10 @@ impl VersionRepoPg {
             .bind(&changeset.author)
             .bind(&changeset.message)
             .bind(changeset.created_at)
+            .bind(changeset.status.as_str())
+            .bind(&changeset.approved_by)
+            .bind(changeset.approved_at)
+            .bind(changeset.promoted_at)
             .execute(&mut *tx)
             .await?;
 
@@ -344,5 +359,13 @@ fn parse_kind(value: &str) -> ChangesetKind {
     match value {
         "rollback" => ChangesetKind::Rollback,
         _ => ChangesetKind::Normal,
+    }
+}
+
+fn parse_status(value: &str) -> ChangesetStatus {
+    match value {
+        "draft" => ChangesetStatus::Draft,
+        "approved" => ChangesetStatus::Approved,
+        _ => ChangesetStatus::Visible,
     }
 }

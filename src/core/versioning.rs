@@ -28,6 +28,35 @@ impl ChangesetKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangesetVisibility {
+    Visible,
+    Draft,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangesetStatus {
+    Draft,
+    Approved,
+    Visible,
+}
+
+impl ChangesetStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ChangesetStatus::Draft => "draft",
+            ChangesetStatus::Approved => "approved",
+            ChangesetStatus::Visible => "visible",
+        }
+    }
+}
+
+fn default_changeset_status() -> ChangesetStatus {
+    ChangesetStatus::Visible
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetDelta {
     #[serde(default)]
@@ -50,6 +79,11 @@ pub struct ChangesetRecord {
     pub author: String,
     pub message: String,
     pub created_at: DateTime<Utc>,
+    #[serde(default = "default_changeset_status")]
+    pub status: ChangesetStatus,
+    pub approved_by: Option<String>,
+    pub approved_at: Option<DateTime<Utc>>,
+    pub promoted_at: Option<DateTime<Utc>>,
     pub assets: Vec<AssetDelta>,
 }
 
@@ -71,6 +105,7 @@ pub struct SubmitChangesetInput {
     pub rollback_of: Option<String>,
     pub author: String,
     pub message: String,
+    pub visibility: ChangesetVisibility,
     pub assets: Vec<AssetDelta>,
 }
 
@@ -139,6 +174,12 @@ pub enum VersioningError {
         repo_id: String,
         branch: String,
         target_changeset_id: String,
+    },
+    InvalidChangesetState {
+        repo_id: String,
+        changeset_id: String,
+        status: ChangesetStatus,
+        expected: &'static str,
     },
 }
 
@@ -306,6 +347,129 @@ impl VersionManager {
             }
         }
         result
+    }
+
+    pub async fn approve_changeset(
+        &self,
+        repo_id: &str,
+        changeset_id: &str,
+        approver: &str,
+    ) -> Result<ChangesetRecord, VersioningError> {
+        let (record, snapshot) = {
+            let mut repos = self.repos.write().expect("versioning lock poisoned");
+            let repo = repos
+                .get_mut(repo_id)
+                .ok_or_else(|| VersioningError::RepoNotFound {
+                    repo_id: repo_id.to_string(),
+                })?;
+            let record = repo
+                .changesets
+                .get_mut(changeset_id)
+                .ok_or_else(|| VersioningError::ChangesetNotFound {
+                    repo_id: repo_id.to_string(),
+                    changeset_id: changeset_id.to_string(),
+                })?;
+
+            match record.status {
+                ChangesetStatus::Draft => {
+                    record.status = ChangesetStatus::Approved;
+                    record.approved_by = Some(approver.to_string());
+                    record.approved_at = Some(Utc::now());
+                }
+                status => {
+                    return Err(VersioningError::InvalidChangesetState {
+                        repo_id: repo_id.to_string(),
+                        changeset_id: changeset_id.to_string(),
+                        status,
+                        expected: "draft",
+                    });
+                }
+            }
+
+            (record.clone(), repos.clone())
+        };
+
+        if let Err(error) = self.persist_repo(repo_id, &snapshot).await {
+            tracing::error!("failed to persist approve state for {repo_id}: {error}");
+        }
+        Ok(record)
+    }
+
+    pub async fn promote_changeset(
+        &self,
+        repo_id: &str,
+        changeset_id: &str,
+        promoter: &str,
+    ) -> Result<ChangesetRecord, VersioningError> {
+        let (record, snapshot) = {
+            let mut repos = self.repos.write().expect("versioning lock poisoned");
+            let repo = repos
+                .get_mut(repo_id)
+                .ok_or_else(|| VersioningError::RepoNotFound {
+                    repo_id: repo_id.to_string(),
+                })?;
+
+            let record_view =
+                repo.changesets
+                    .get(changeset_id)
+                    .ok_or_else(|| VersioningError::ChangesetNotFound {
+                        repo_id: repo_id.to_string(),
+                        changeset_id: changeset_id.to_string(),
+                    })?;
+            if record_view.status != ChangesetStatus::Approved {
+                return Err(VersioningError::InvalidChangesetState {
+                    repo_id: repo_id.to_string(),
+                    changeset_id: changeset_id.to_string(),
+                    status: record_view.status,
+                    expected: "approved",
+                });
+            }
+
+            let branch = record_view.branch.clone();
+            let base = record_view.base_changeset_id.clone();
+            let branch_state =
+                repo.branches
+                    .get_mut(&branch)
+                    .ok_or_else(|| VersioningError::BranchNotFound {
+                        repo_id: repo_id.to_string(),
+                        branch: branch.clone(),
+                    })?;
+            let expected_head = branch_state.record.head_changeset_id.clone();
+            if expected_head != base {
+                return Err(VersioningError::BaseChangesetMismatch {
+                    repo_id: repo_id.to_string(),
+                    branch,
+                    expected: expected_head,
+                    got: base,
+                });
+            }
+
+            branch_state.record.head_changeset_id = Some(changeset_id.to_string());
+            if !branch_state.history.iter().any(|id| id == changeset_id) {
+                branch_state.history.push(changeset_id.to_string());
+            }
+
+            let record = repo
+                .changesets
+                .get_mut(changeset_id)
+                .ok_or_else(|| VersioningError::ChangesetNotFound {
+                    repo_id: repo_id.to_string(),
+                    changeset_id: changeset_id.to_string(),
+                })?;
+            record.status = ChangesetStatus::Visible;
+            if record.approved_by.is_none() {
+                record.approved_by = Some(promoter.to_string());
+                record.approved_at = Some(Utc::now());
+            }
+            record.promoted_at = Some(Utc::now());
+
+            (record.clone(), repos.clone())
+        };
+
+        if let Err(error) = self.persist_repo(repo_id, &snapshot).await {
+            tracing::error!("failed to persist promote state for {repo_id}: {error}");
+        }
+        Ok(record)
     }
 
     pub fn history(
@@ -517,6 +681,7 @@ impl VersionManager {
             rollback_of,
             author,
             message,
+            visibility,
             assets,
         } = input;
 
@@ -595,13 +760,22 @@ impl VersionManager {
             author,
             message,
             created_at: Utc::now(),
+            status: match visibility {
+                ChangesetVisibility::Visible => ChangesetStatus::Visible,
+                ChangesetVisibility::Draft => ChangesetStatus::Draft,
+            },
+            approved_by: None,
+            approved_at: None,
+            promoted_at: None,
             assets: normalized_assets,
         };
 
         repo.snapshots.insert(changeset_id.clone(), new_snapshot);
         repo.changesets.insert(changeset_id.clone(), record.clone());
-        branch_state.record.head_changeset_id = Some(changeset_id.clone());
-        branch_state.history.push(changeset_id);
+        if record.status == ChangesetStatus::Visible {
+            branch_state.record.head_changeset_id = Some(changeset_id.clone());
+            branch_state.history.push(changeset_id);
+        }
 
         Ok(record)
     }
@@ -769,6 +943,7 @@ mod tests {
                 rollback_of: None,
                 author: "alice".to_string(),
                 message: "first".to_string(),
+                visibility: ChangesetVisibility::Visible,
                 assets: vec![AssetDelta {
                     asset_id: None,
                     path: "a.txt".to_string(),
@@ -788,6 +963,7 @@ mod tests {
                 rollback_of: None,
                 author: "alice".to_string(),
                 message: "second".to_string(),
+                visibility: ChangesetVisibility::Visible,
                 assets: vec![AssetDelta {
                     asset_id: None,
                     path: "a.txt".to_string(),
@@ -819,6 +995,7 @@ mod tests {
                 rollback_of: None,
                 author: "alice".to_string(),
                 message: "first".to_string(),
+                visibility: ChangesetVisibility::Visible,
                 assets: vec![],
             })
             .await
@@ -833,6 +1010,7 @@ mod tests {
                 rollback_of: None,
                 author: "alice".to_string(),
                 message: "invalid".to_string(),
+                visibility: ChangesetVisibility::Visible,
                 assets: vec![],
             })
             .await
@@ -861,6 +1039,7 @@ mod tests {
                 rollback_of: None,
                 author: "alice".to_string(),
                 message: "first".to_string(),
+                visibility: ChangesetVisibility::Visible,
                 assets: vec![AssetDelta {
                     asset_id: None,
                     path: "a".to_string(),
@@ -880,6 +1059,7 @@ mod tests {
                 rollback_of: None,
                 author: "alice".to_string(),
                 message: "second".to_string(),
+                visibility: ChangesetVisibility::Visible,
                 assets: vec![AssetDelta {
                     asset_id: None,
                     path: "a".to_string(),
@@ -906,6 +1086,7 @@ mod tests {
                 rollback_of: Some(plan.target_changeset_id),
                 author: "alice".to_string(),
                 message: "rollback".to_string(),
+                visibility: ChangesetVisibility::Visible,
                 assets: plan.assets,
             })
             .await
@@ -934,6 +1115,7 @@ mod tests {
                 rollback_of: None,
                 author: "alice".to_string(),
                 message: "first".to_string(),
+                visibility: ChangesetVisibility::Visible,
                 assets: vec![AssetDelta {
                     asset_id: None,
                     path: "env/config.json".to_string(),
