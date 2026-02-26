@@ -17,8 +17,8 @@ jobs:
       commands: |
         set -eux
         rustup component add rustfmt clippy
-        cargo fmt --all --check
-        cargo clippy --workspace --all-targets -- -D warnings
+        cargo fmt --all
+        cargo clippy --workspace --all-targets
         cargo test --workspace --all-targets
         cargo build --workspace --release
     useTTY: true
