@@ -1,4 +1,4 @@
-﻿//! HyperTide backend server
+//! HyperTide backend server
 
 mod api;
 mod core;
@@ -27,6 +27,7 @@ use crate::api::versioning::{
     submit_changeset, sync_snapshot,
 };
 use crate::core::auth::AuthManager;
+use crate::core::audit_chain::AuditChain;
 use crate::core::db::{migrations::run_migrations, pool::init_pg_pool_from_env};
 use crate::core::events::EventStore;
 use crate::core::lock::LockManager;
@@ -52,6 +53,7 @@ pub struct AppState {
     pub auth_manager: AuthManager,
     pub version_manager: VersionManager,
     pub event_store: Option<EventStore>,
+    pub audit_chain: Option<AuditChain>,
     pub db_pool: Option<PgPool>,
 }
 
@@ -112,8 +114,14 @@ fn build_app(state: AppState) -> Router {
         .route("/v2/branches", post(create_branch))
         .route("/v2/branches/:repo_id", get(list_branches))
         .route("/v2/changesets", post(submit_changeset))
-        .route("/v2/changesets/:changeset_id/approve", post(approve_changeset))
-        .route("/v2/changesets/:changeset_id/promote", post(promote_changeset))
+        .route(
+            "/v2/changesets/:changeset_id/approve",
+            post(approve_changeset),
+        )
+        .route(
+            "/v2/changesets/:changeset_id/promote",
+            post(promote_changeset),
+        )
         .route("/v2/history/:repo_id", get(list_history))
         .route("/v2/rollback", post(rollback))
         .route("/v2/sync/:repo_id", get(sync_snapshot))
@@ -155,14 +163,14 @@ async fn main() {
     }
     tracing::info!("Storage initialized at ./storage");
 
-    let auth_manager =
-        match AuthManager::with_dev_key_and_db(DEV_MASTER_KEY, db_pool.clone()).await {
-            Ok(manager) => manager,
-            Err(e) => {
-                tracing::error!("Failed to initialize auth manager: {e}");
-                return;
-            }
-        };
+    let auth_manager = match AuthManager::with_dev_key_and_db(DEV_MASTER_KEY, db_pool.clone()).await
+    {
+        Ok(manager) => manager,
+        Err(e) => {
+            tracing::error!("Failed to initialize auth manager: {e}");
+            return;
+        }
+    };
     let lock_manager = match LockManager::with_pg(db_pool.clone()).await {
         Ok(manager) => manager,
         Err(e) => {
@@ -185,6 +193,7 @@ async fn main() {
         auth_manager,
         version_manager,
         event_store: Some(EventStore::new(db_pool.clone())),
+        audit_chain: Some(AuditChain::new(db_pool.clone())),
         db_pool: Some(db_pool),
     };
 
@@ -219,7 +228,10 @@ async fn health_ready(State(state): State<AppState>) -> (StatusCode, &'static st
         return (StatusCode::SERVICE_UNAVAILABLE, "DB_NOT_CONFIGURED");
     };
 
-    match sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(pool).await {
+    match sqlx::query_scalar::<_, i32>("SELECT 1")
+        .fetch_one(pool)
+        .await
+    {
         Ok(_) => (StatusCode::OK, "READY"),
         Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "DB_UNAVAILABLE"),
     }
@@ -242,6 +254,7 @@ mod tests {
             auth_manager: AuthManager::with_dev_key(DEV_MASTER_KEY),
             version_manager: VersionManager::new(),
             event_store: None,
+            audit_chain: None,
             db_pool: None,
         }
     }
@@ -259,7 +272,9 @@ mod tests {
         let response = app.oneshot(request).await.expect("response");
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let payload: Value = serde_json::from_slice(&body).expect("json");
         assert_eq!(payload["success"], Value::Bool(true));
     }

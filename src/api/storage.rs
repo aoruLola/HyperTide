@@ -1,4 +1,4 @@
-﻿//! Storage API Handlers
+//! Storage API Handlers
 //! HTTP endpoints for file upload/download operations
 
 use axum::{
@@ -9,6 +9,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::api::common::ApiResponse;
 use crate::api::middleware::authz;
@@ -41,8 +42,7 @@ pub async fn upload_file(
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> (StatusCode, Json<ApiResponse<UploadResponse>>) {
-    if let Err((status, message)) = require_permission(&state, &headers, Permission::Upload).await
-    {
+    if let Err((status, message)) = require_permission(&state, &headers, Permission::Upload).await {
         return (status, Json(ApiResponse::err(message)));
     }
 
@@ -76,14 +76,34 @@ pub async fn upload_file(
     };
 
     match state.storage_manager.store(&data, &filename).await {
-        Ok(stored) => (
-            StatusCode::OK,
-            Json(ApiResponse::ok(UploadResponse {
+        Ok(stored) => {
+            if let Some(event_store) = &state.event_store {
+                if let Err(error) = event_store
+                    .append(
+                        "BLOB_UPLOADED",
+                        "storage-upload",
+                        None,
+                        None,
+                        json!({
+                            "hash": stored.hash,
+                            "size_bytes": stored.size_bytes,
+                            "original_path": stored.original_path,
+                        }),
+                    )
+                    .await
+                {
+                    tracing::warn!("failed to append blob upload event: {error}");
+                }
+            }
+            (
+                StatusCode::OK,
+                Json(ApiResponse::ok(UploadResponse {
                 hash: stored.hash,
                 size_bytes: stored.size_bytes,
                 original_path: stored.original_path,
-            })),
-        ),
+                })),
+            )
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::err(e))),
     }
 }
@@ -95,8 +115,7 @@ pub async fn download_file(
     headers: HeaderMap,
     Path(hash): Path<String>,
 ) -> Response {
-    if let Err((status, message)) =
-        require_permission(&state, &headers, Permission::Download).await
+    if let Err((status, message)) = require_permission(&state, &headers, Permission::Download).await
     {
         return (status, message).into_response();
     }
@@ -122,8 +141,7 @@ pub async fn check_exists(
     headers: HeaderMap,
     Path(hash): Path<String>,
 ) -> (StatusCode, Json<ApiResponse<bool>>) {
-    if let Err((status, message)) =
-        require_permission(&state, &headers, Permission::Download).await
+    if let Err((status, message)) = require_permission(&state, &headers, Permission::Download).await
     {
         return (status, Json(ApiResponse::err(message)));
     }
@@ -149,8 +167,7 @@ pub async fn calculate_hash(
     headers: HeaderMap,
     Json(payload): Json<HashRequest>,
 ) -> (StatusCode, Json<ApiResponse<HashResponse>>) {
-    if let Err((status, message)) = require_permission(&state, &headers, Permission::Upload).await
-    {
+    if let Err((status, message)) = require_permission(&state, &headers, Permission::Upload).await {
         return (status, Json(ApiResponse::err(message)));
     }
 

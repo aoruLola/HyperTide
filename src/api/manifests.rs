@@ -7,6 +7,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use serde_json::json;
 
 use crate::api::{common::ApiResponse, middleware::authz};
 use crate::core::{auth::Permission, storage::StorageManager};
@@ -67,7 +68,7 @@ fn merkle_root(chunks: &[ManifestChunk]) -> String {
         .collect::<Vec<_>>();
 
     while level.len() > 1 {
-        let mut next = Vec::with_capacity((level.len() + 1) / 2);
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
         for pair in level.chunks(2) {
             let left = &pair[0];
             let right = pair.get(1).unwrap_or(&pair[0]);
@@ -78,7 +79,9 @@ fn merkle_root(chunks: &[ManifestChunk]) -> String {
         level = next;
     }
 
-    level.pop().unwrap_or_else(|| StorageManager::calculate_hash(b""))
+    level
+        .pop()
+        .unwrap_or_else(|| StorageManager::calculate_hash(b""))
 }
 
 pub async fn create_manifest(
@@ -219,7 +222,9 @@ pub async fn create_manifest(
             Err(error) => {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ApiResponse::err(format!("failed to persist manifest: {error}"))),
+                    Json(ApiResponse::err(format!(
+                        "failed to persist manifest: {error}"
+                    ))),
                 );
             }
         }
@@ -227,11 +232,31 @@ pub async fn create_manifest(
 
     (
         StatusCode::CREATED,
-        Json(ApiResponse::ok(CreateManifestResponse {
+        Json(ApiResponse::ok({
+            if let Some(event_store) = &state.event_store {
+                if let Err(error) = event_store
+                    .append(
+                        "MANIFEST_CREATED",
+                        "manifest-api",
+                        None,
+                        None,
+                        json!({
+                            "manifest_hash": manifest_hash,
+                            "chunk_count": canonical.chunks.len(),
+                            "chunk_size_policy": canonical.chunk_size_policy,
+                            "created": created,
+                        }),
+                    )
+                    .await
+                {
+                    tracing::warn!("failed to append manifest event: {error}");
+                }
+            }
+            CreateManifestResponse {
             manifest_hash,
             merkle_root,
             chunk_count: canonical.chunks.len(),
             created,
-        })),
+        }})),
     )
 }

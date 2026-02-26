@@ -362,13 +362,12 @@ impl VersionManager {
                 .ok_or_else(|| VersioningError::RepoNotFound {
                     repo_id: repo_id.to_string(),
                 })?;
-            let record = repo
-                .changesets
-                .get_mut(changeset_id)
-                .ok_or_else(|| VersioningError::ChangesetNotFound {
+            let record = repo.changesets.get_mut(changeset_id).ok_or_else(|| {
+                VersioningError::ChangesetNotFound {
                     repo_id: repo_id.to_string(),
                     changeset_id: changeset_id.to_string(),
-                })?;
+                }
+            })?;
 
             match record.status {
                 ChangesetStatus::Draft => {
@@ -409,13 +408,12 @@ impl VersionManager {
                     repo_id: repo_id.to_string(),
                 })?;
 
-            let record_view =
-                repo.changesets
-                    .get(changeset_id)
-                    .ok_or_else(|| VersioningError::ChangesetNotFound {
-                        repo_id: repo_id.to_string(),
-                        changeset_id: changeset_id.to_string(),
-                    })?;
+            let record_view = repo.changesets.get(changeset_id).ok_or_else(|| {
+                VersioningError::ChangesetNotFound {
+                    repo_id: repo_id.to_string(),
+                    changeset_id: changeset_id.to_string(),
+                }
+            })?;
             if record_view.status != ChangesetStatus::Approved {
                 return Err(VersioningError::InvalidChangesetState {
                     repo_id: repo_id.to_string(),
@@ -449,13 +447,12 @@ impl VersionManager {
                 branch_state.history.push(changeset_id.to_string());
             }
 
-            let record = repo
-                .changesets
-                .get_mut(changeset_id)
-                .ok_or_else(|| VersioningError::ChangesetNotFound {
+            let record = repo.changesets.get_mut(changeset_id).ok_or_else(|| {
+                VersioningError::ChangesetNotFound {
                     repo_id: repo_id.to_string(),
                     changeset_id: changeset_id.to_string(),
-                })?;
+                }
+            })?;
             record.status = ChangesetStatus::Visible;
             if record.approved_by.is_none() {
                 record.approved_by = Some(promoter.to_string());
@@ -689,12 +686,13 @@ impl VersionManager {
             return Err(VersioningError::BaseChangesetRequired);
         }
 
-        let branch_state = repo.branches.get_mut(&branch).ok_or_else(|| {
-            VersioningError::BranchNotFound {
-                repo_id: repo_id.clone(),
-                branch: branch.clone(),
-            }
-        })?;
+        let branch_state =
+            repo.branches
+                .get_mut(&branch)
+                .ok_or_else(|| VersioningError::BranchNotFound {
+                    repo_id: repo_id.clone(),
+                    branch: branch.clone(),
+                })?;
 
         let expected = branch_state.record.head_changeset_id.clone();
         if expected.is_none() {
@@ -724,10 +722,7 @@ impl VersionManager {
 
         let mut normalized_assets = Vec::with_capacity(assets.len());
         for mut asset in assets {
-            let asset_id = asset
-                .asset_id
-                .clone()
-                .unwrap_or_else(|| asset.path.clone());
+            let asset_id = asset.asset_id.clone().unwrap_or_else(|| asset.path.clone());
             asset.asset_id = Some(asset_id.clone());
             asset.from_blob_hash = new_snapshot
                 .get(&asset_id)
@@ -1100,10 +1095,8 @@ mod tests {
 
     #[tokio::test]
     async fn persists_state_across_manager_restarts() {
-        let state_file = std::env::temp_dir().join(format!(
-            "hypertide-versioning-{}.json",
-            Uuid::new_v4()
-        ));
+        let state_file =
+            std::env::temp_dir().join(format!("hypertide-versioning-{}.json", Uuid::new_v4()));
 
         let first_manager = VersionManager::with_persistence(&state_file);
         first_manager

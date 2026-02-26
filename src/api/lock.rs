@@ -186,6 +186,20 @@ pub async fn force_unlock_file(
                     tracing::warn!("failed to append lock force-release event: {error}");
                 }
             }
+            if let Some(audit_chain) = &state.audit_chain {
+                if let Err(error) = audit_chain
+                    .append(
+                        "LOCK_FORCE_RELEASED",
+                        "system-admin",
+                        None,
+                        Some(&payload.file_path),
+                        json!({ "file_path": payload.file_path }),
+                    )
+                    .await
+                {
+                    tracing::warn!("failed to append force-release audit: {error}");
+                }
+            }
             (StatusCode::OK, Json(ApiResponse::ok(true)))
         }
         Ok(false) => (

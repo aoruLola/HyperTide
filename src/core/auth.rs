@@ -1,4 +1,4 @@
-﻿//! Authentication Manager
+//! Authentication Manager
 //! Handles API key/JWT validation and permission checking.
 
 pub mod repo;
@@ -155,8 +155,8 @@ impl AuthManager {
         let mut manager = Self::with_dev_key(master_key);
         let pepper = std::env::var("AUTH_PEPPER").unwrap_or_else(|_| "hypertide-dev-pepper".into());
         let repo = AuthRepo::new(db_pool, pepper);
-        let token_service =
-            TokenService::from_env().map_err(|error| anyhow!("JWT service initialization failed: {error}"))?;
+        let token_service = TokenService::from_env()
+            .map_err(|error| anyhow!("JWT service initialization failed: {error}"))?;
         manager.access_token_ttl_secs = std::env::var("ACCESS_TOKEN_TTL_SECS")
             .ok()
             .and_then(|v| v.parse::<i64>().ok())

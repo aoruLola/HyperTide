@@ -54,9 +54,7 @@ pub async fn require_permission_with_options(
 }
 
 fn parse_bearer_token(header_value: &str) -> Option<&str> {
-    let mut parts = header_value.splitn(2, ' ');
-    let scheme = parts.next()?;
-    let token = parts.next()?;
+    let (scheme, token) = header_value.split_once(' ')?;
     if scheme.eq_ignore_ascii_case("bearer") && !token.is_empty() {
         Some(token)
     } else {

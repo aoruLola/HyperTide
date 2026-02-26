@@ -5,8 +5,7 @@ use sqlx::{FromRow, PgPool};
 
 use crate::core::versioning::{
     AssetDelta, BranchRecord, BranchState, ChangesetKind, ChangesetRecord, ChangesetStatus,
-    RepoState,
-    SnapshotAsset,
+    RepoState, SnapshotAsset,
 };
 
 #[derive(Clone)]
@@ -201,17 +200,14 @@ impl VersionRepoPg {
 
             for row in snapshot_rows {
                 let asset_id = row.asset_id.unwrap_or_else(|| row.path.clone());
-                repo.snapshots
-                    .entry(row.changeset_id)
-                    .or_insert_with(HashMap::new)
-                    .insert(
-                        asset_id.clone(),
-                        SnapshotAsset {
-                            asset_id,
-                            path: row.path,
-                            blob_hash: row.blob_hash,
-                        },
-                    );
+                repo.snapshots.entry(row.changeset_id).or_default().insert(
+                    asset_id.clone(),
+                    SnapshotAsset {
+                        asset_id,
+                        path: row.path,
+                        blob_hash: row.blob_hash,
+                    },
+                );
             }
 
             let branch_heads = repo
@@ -246,7 +242,12 @@ impl VersionRepoPg {
             .branches
             .get(&repo.default_branch)
             .map(|state| state.record.created_by.as_str())
-            .or_else(|| repo.branches.values().next().map(|s| s.record.created_by.as_str()))
+            .or_else(|| {
+                repo.branches
+                    .values()
+                    .next()
+                    .map(|s| s.record.created_by.as_str())
+            })
             .unwrap_or("system");
 
         sqlx::query(

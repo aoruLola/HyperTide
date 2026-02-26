@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use sqlx::PgPool;
+use std::sync::Arc;
 
 pub mod repo_pg;
 use self::repo_pg::LockRepoPg;

@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod audit_chain;
 pub mod db;
 pub mod events;
 pub mod lock;

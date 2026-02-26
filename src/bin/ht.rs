@@ -1,5 +1,5 @@
-﻿use std::fs;
 use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -403,7 +403,10 @@ async fn branch_create(args: BranchCreateArgs) -> Result<()> {
     )
     .await?;
     if !response.success {
-        return Err(anyhow!(api_error_message(&response, "create branch failed")));
+        return Err(anyhow!(api_error_message(
+            &response,
+            "create branch failed"
+        )));
     }
     println!("branch created: {}", args.name);
     Ok(())
@@ -425,7 +428,10 @@ async fn branch_list(args: BranchListArgs) -> Result<()> {
     )
     .await?;
     if !response.success {
-        return Err(anyhow!(api_error_message(&response, "list branches failed")));
+        return Err(anyhow!(api_error_message(
+            &response,
+            "list branches failed"
+        )));
     }
     let data = response.data.context("missing response data")?;
     for branch in data.branches {
@@ -456,7 +462,10 @@ async fn branch_switch(args: BranchSwitchArgs) -> Result<()> {
     )
     .await?;
     if !response.success {
-        return Err(anyhow!(api_error_message(&response, "list branches failed")));
+        return Err(anyhow!(api_error_message(
+            &response,
+            "list branches failed"
+        )));
     }
     let data = response.data.context("missing response data")?;
     if !data.branches.iter().any(|b| b.name == args.name) {
@@ -520,7 +529,14 @@ async fn submit(args: SubmitArgs) -> Result<()> {
         return Err(anyhow!("nothing staged; use `ht add --path --blob` first"));
     }
 
-    let base = resolve_base_changeset(&client, &mut profile, &repo, &branch, stage.base_changeset_id.as_deref()).await?;
+    let base = resolve_base_changeset(
+        &client,
+        &mut profile,
+        &repo,
+        &branch,
+        stage.base_changeset_id.as_deref(),
+    )
+    .await?;
     let author = fetch_owner_id(&client, &profile).await?;
     let payload = SubmitRequest {
         repo_id: &repo,
@@ -717,7 +733,10 @@ async fn fetch_owner_id(client: &reqwest::Client, profile: &CliProfile) -> Resul
     )
     .await?;
     if !response.payload.success {
-        return Err(anyhow!(api_error_message(&response.payload, "verify failed")));
+        return Err(anyhow!(api_error_message(
+            &response.payload,
+            "verify failed"
+        )));
     }
     let verify = response.payload.data.context("missing verify data")?;
     if !verify.valid {
@@ -756,7 +775,10 @@ fn apply_token_pair(profile: &mut CliProfile, pair: TokenPair) {
     profile.access_token_expires_at = Some(now_unix() + pair.expires_in.max(0));
 }
 
-async fn exchange_api_key_for_tokens(client: &reqwest::Client, profile: &mut CliProfile) -> Result<()> {
+async fn exchange_api_key_for_tokens(
+    client: &reqwest::Client,
+    profile: &mut CliProfile,
+) -> Result<()> {
     let url = format!(
         "{}/v2/auth/exchange-key",
         profile.server.trim_end_matches('/')
@@ -862,7 +884,9 @@ async fn chunk_upload(args: ChunkUploadArgs) -> Result<()> {
             let upload_resp: ApiResponse<serde_json::Value> = send_authed_api(
                 &client,
                 &mut profile,
-                move |client, profile| with_auth(client.put(&upload_url).body(payload.clone()), profile),
+                move |client, profile| {
+                    with_auth(client.put(&upload_url).body(payload.clone()), profile)
+                },
                 "chunk upload response decode failed",
             )
             .await?;
@@ -925,8 +949,11 @@ async fn refresh_access_token(client: &reqwest::Client, profile: &mut CliProfile
     let payload = RefreshRequest {
         refresh_token: &refresh_token,
     };
-    let response: HttpResponse<TokenPair> =
-        execute_api(client.post(url).json(&payload), "refresh response decode failed").await?;
+    let response: HttpResponse<TokenPair> = execute_api(
+        client.post(url).json(&payload),
+        "refresh response decode failed",
+    )
+    .await?;
     if !response.payload.success {
         return Err(anyhow!(
             "{}",
@@ -978,7 +1005,8 @@ where
 {
     ensure_access_token(client, profile).await?;
 
-    let mut response: HttpResponse<T> = execute_api(build_request(client, profile), context).await?;
+    let mut response: HttpResponse<T> =
+        execute_api(build_request(client, profile), context).await?;
     if !profile.api_key_direct && response.status == StatusCode::UNAUTHORIZED {
         refresh_access_token(client, profile)
             .await

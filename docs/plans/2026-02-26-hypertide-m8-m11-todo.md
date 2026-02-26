@@ -29,8 +29,8 @@
 | M9-009 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m9-git--p4-core-mechanics | done | codex | P1 | 2026-03-24 | none |
 | M9-010 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m9-git--p4-core-mechanics | done | codex | P1 | 2026-03-25 | none |
 | M10-001 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m10-trust-and-governance | done | codex | P0 | 2026-03-29 | none |
-| M10-002 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m10-trust-and-governance | in_progress | codex | P0 | 2026-03-30 | lock/versioning events landed; expand coverage |
-| M10-003 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m10-trust-and-governance | todo | codex | P0 | 2026-03-30 | M10-001 |
+| M10-002 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m10-trust-and-governance | done | codex | P0 | 2026-03-30 | none |
+| M10-003 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m10-trust-and-governance | done | codex | P0 | 2026-03-30 | none |
 | M10-004 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m10-trust-and-governance | todo | codex | P0 | 2026-03-31 | M10-001~003 |
 | M10-005 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m10-trust-and-governance | todo | codex | P0 | 2026-03-31 | M10-004 |
 | M10-006 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m10-trust-and-governance | todo | codex | P0 | 2026-04-01 | M8-005 |

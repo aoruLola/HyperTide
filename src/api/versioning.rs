@@ -1,4 +1,4 @@
-﻿use axum::{
+use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
@@ -10,8 +10,8 @@ use crate::api::common::ApiResponse;
 use crate::api::middleware::authz;
 use crate::core::auth::{AuthIdentity, Permission};
 use crate::core::versioning::{
-    AssetDelta, BranchRecord, ChangesetKind, ChangesetRecord, ChangesetVisibility, HistoryPage, SnapshotEntry,
-    SubmitChangesetInput, SyncSnapshot, VersioningError, ROOT_BASE_CHANGESET_ID,
+    AssetDelta, BranchRecord, ChangesetKind, ChangesetRecord, ChangesetVisibility, HistoryPage,
+    SnapshotEntry, SubmitChangesetInput, SyncSnapshot, VersioningError, ROOT_BASE_CHANGESET_ID,
 };
 use crate::AppState;
 
@@ -216,12 +216,12 @@ pub async fn create_branch(
     match state
         .version_manager
         .create_branch(
-        &payload.repo_id,
-        &payload.branch,
-        payload.from_changeset_id.as_deref(),
-        &identity.owner_id,
-    )
-    .await
+            &payload.repo_id,
+            &payload.branch,
+            payload.from_changeset_id.as_deref(),
+            &identity.owner_id,
+        )
+        .await
     {
         Ok(branch) => (StatusCode::CREATED, Json(ApiResponse::ok(branch))),
         Err(error) => {
@@ -321,6 +321,24 @@ pub async fn submit_changeset(
                     .await
                 {
                     tracing::warn!("failed to append submit changeset event: {error}");
+                }
+            }
+            if let Some(audit_chain) = &state.audit_chain {
+                if let Err(error) = audit_chain
+                    .append(
+                        "CHANGESET_SUBMITTED",
+                        &identity.owner_id,
+                        Some(&changeset.repo_id),
+                        Some(&changeset.changeset_id),
+                        json!({
+                            "branch": changeset.branch,
+                            "status": changeset.status,
+                            "base_changeset_id": changeset.base_changeset_id,
+                        }),
+                    )
+                    .await
+                {
+                    tracing::warn!("failed to append submit audit: {error}");
                 }
             }
             (StatusCode::CREATED, Json(ApiResponse::ok(changeset)))
@@ -428,6 +446,23 @@ pub async fn rollback(
                     tracing::warn!("failed to append rollback event: {error}");
                 }
             }
+            if let Some(audit_chain) = &state.audit_chain {
+                if let Err(error) = audit_chain
+                    .append(
+                        "ROLLBACK_VISIBLE",
+                        &identity.owner_id,
+                        Some(&changeset.repo_id),
+                        Some(&changeset.changeset_id),
+                        json!({
+                            "branch": changeset.branch,
+                            "target_changeset_id": plan.target_changeset_id,
+                        }),
+                    )
+                    .await
+                {
+                    tracing::warn!("failed to append rollback audit: {error}");
+                }
+            }
             (
                 StatusCode::CREATED,
                 Json(ApiResponse::ok(RollbackResponse {
@@ -482,6 +517,23 @@ pub async fn approve_changeset(
                     tracing::warn!("failed to append approve event: {error}");
                 }
             }
+            if let Some(audit_chain) = &state.audit_chain {
+                if let Err(error) = audit_chain
+                    .append(
+                        "CHANGESET_APPROVED",
+                        &identity.owner_id,
+                        Some(&changeset.repo_id),
+                        Some(&changeset.changeset_id),
+                        json!({
+                            "branch": changeset.branch,
+                            "status": changeset.status,
+                        }),
+                    )
+                    .await
+                {
+                    tracing::warn!("failed to append approve audit: {error}");
+                }
+            }
             (StatusCode::OK, Json(ApiResponse::ok(changeset)))
         }
         Err(error) => {
@@ -525,6 +577,24 @@ pub async fn promote_changeset(
                     .await
                 {
                     tracing::warn!("failed to append promote event: {error}");
+                }
+            }
+            if let Some(audit_chain) = &state.audit_chain {
+                if let Err(error) = audit_chain
+                    .append(
+                        "CHANGESET_PROMOTED",
+                        &identity.owner_id,
+                        Some(&changeset.repo_id),
+                        Some(&changeset.changeset_id),
+                        json!({
+                            "branch": changeset.branch,
+                            "status": changeset.status,
+                            "promoted_at": changeset.promoted_at,
+                        }),
+                    )
+                    .await
+                {
+                    tracing::warn!("failed to append promote audit: {error}");
                 }
             }
             (StatusCode::OK, Json(ApiResponse::ok(changeset)))
