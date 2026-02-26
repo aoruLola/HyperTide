@@ -1,2 +1,4 @@
 /target
 /.worktrees
+/deploy/.env
+/deploy/keys/
