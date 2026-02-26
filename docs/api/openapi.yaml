@@ -327,6 +327,14 @@ paths:
         - BearerAuth: []
       responses:
         '200': { description: Replay verification result }
+  /v2/trust/replay/readiness:
+    get:
+      summary: Evaluate event-led readiness based on replay consistency
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Replay readiness report }
 components:
   securitySchemes:
     ApiKeyAuth:

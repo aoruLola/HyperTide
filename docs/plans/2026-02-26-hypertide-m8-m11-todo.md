@@ -37,7 +37,7 @@
 | M10-007 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m10-trust-and-governance | done | codex | P1 | 2026-04-01 | none |
 | M10-008 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m10-trust-and-governance | done | codex | P1 | 2026-04-02 | none |
 | M11-001 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | done | codex | P0 | 2026-04-08 | none |
-| M11-002 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | todo | codex | P0 | 2026-04-08 | M11-001 |
+| M11-002 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | in_progress | codex | P0 | 2026-04-08 | none |
 | M11-003 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | todo | codex | P0 | 2026-04-10 | M9-008 |
 | M11-004 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | todo | codex | P1 | 2026-04-12 | M9 close |
 | M11-005 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | todo | codex | P1 | 2026-04-12 | M11-004 |

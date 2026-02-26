@@ -23,8 +23,8 @@ use crate::api::lock::{force_unlock_file, list_locks, lock_file, renew_lock_file
 use crate::api::manifests::create_manifest;
 use crate::api::storage::{calculate_hash, check_exists, download_file, upload_file};
 use crate::api::trust::{
-    attest_checkpoint, generate_checkpoint, latest_checkpoint, verify_audit_chain, verify_replay,
-    witness_summary,
+    attest_checkpoint, generate_checkpoint, latest_checkpoint, replay_readiness,
+    verify_audit_chain, verify_replay, witness_summary,
 };
 use crate::api::versioning::{
     approve_changeset, create_branch, list_branches, list_history, promote_changeset, rollback,
@@ -146,6 +146,7 @@ fn build_app(state: AppState) -> Router {
         .route("/v2/trust/witness/summary", get(witness_summary))
         .route("/v2/trust/audit/verify", post(verify_audit_chain))
         .route("/v2/trust/replay/verify", post(verify_replay))
+        .route("/v2/trust/replay/readiness", get(replay_readiness))
         .layer(cors)
         .with_state(state)
 }
@@ -360,6 +361,33 @@ mod tests {
         let request = Request::builder()
             .method("POST")
             .uri("/v2/trust/replay/verify")
+            .body(Body::empty())
+            .expect("request");
+
+        let response = app.oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn replay_readiness_returns_503_when_service_unavailable() {
+        let app = build_app(test_state());
+
+        let request = Request::builder()
+            .uri("/v2/trust/replay/readiness")
+            .header("X-API-Key", DEV_MASTER_KEY)
+            .body(Body::empty())
+            .expect("request");
+
+        let response = app.oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn replay_readiness_rejects_missing_api_key() {
+        let app = build_app(test_state());
+
+        let request = Request::builder()
+            .uri("/v2/trust/replay/readiness")
             .body(Body::empty())
             .expect("request");
 

@@ -18,8 +18,28 @@ pub struct ReplayVerification {
     pub summary: ReplaySummary,
     pub current_locks: i64,
     pub current_visible_changesets: i64,
+    pub branch_heads_in_replay: usize,
     pub consistency_ok: bool,
     pub mismatches: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReplayReadinessMetrics {
+    pub events_processed: i64,
+    pub replay_mismatch_count: usize,
+    pub audit_entry_count: i64,
+    pub checkpoint_count: i64,
+    pub witness_receipt_count: i64,
+    pub branch_heads_in_db: i64,
+    pub branch_heads_in_replay: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReplayReadinessReport {
+    pub consistency_ok: bool,
+    pub recommendation: String,
+    pub blockers: Vec<String>,
+    pub metrics: ReplayReadinessMetrics,
 }
 
 #[derive(Clone)]
@@ -214,8 +234,67 @@ impl ReplayService {
             summary: replay.summary,
             current_locks,
             current_visible_changesets,
+            branch_heads_in_replay: replay.branch_heads.len(),
             consistency_ok: mismatches.is_empty(),
             mismatches,
+        })
+    }
+
+    pub async fn readiness(&self) -> Result<ReplayReadinessReport, sqlx::Error> {
+        let verification = self.verify().await?;
+        let audit_entry_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM audit_chain_entries")
+                .fetch_one(&self.pool)
+                .await?;
+        let checkpoint_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM trust_checkpoints")
+            .fetch_one(&self.pool)
+            .await?;
+        let witness_receipt_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM witness_receipts")
+                .fetch_one(&self.pool)
+                .await?;
+        let branch_heads_in_db = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM branches WHERE head_changeset_id IS NOT NULL",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        let mut blockers = Vec::new();
+        if !verification.consistency_ok {
+            blockers.push("replay consistency check has mismatches".to_string());
+        }
+        if verification.summary.events_processed == 0 {
+            blockers.push("event store has no events".to_string());
+        }
+        if audit_entry_count == 0 {
+            blockers.push("audit chain is empty".to_string());
+        }
+        if checkpoint_count == 0 {
+            blockers.push("no trust checkpoint generated".to_string());
+        }
+        if branch_heads_in_db > 0 && verification.summary.changeset_promoted == 0 {
+            blockers.push("no promote events found for branch head movement".to_string());
+        }
+
+        let recommendation = if blockers.is_empty() {
+            "canary_event_led_candidate".to_string()
+        } else {
+            "keep_dual_write".to_string()
+        };
+
+        Ok(ReplayReadinessReport {
+            consistency_ok: blockers.is_empty(),
+            recommendation,
+            blockers,
+            metrics: ReplayReadinessMetrics {
+                events_processed: verification.summary.events_processed,
+                replay_mismatch_count: verification.mismatches.len(),
+                audit_entry_count,
+                checkpoint_count,
+                witness_receipt_count,
+                branch_heads_in_db,
+                branch_heads_in_replay: verification.branch_heads_in_replay,
+            },
         })
     }
 }
