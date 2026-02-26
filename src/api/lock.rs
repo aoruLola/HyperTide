@@ -26,6 +26,12 @@ pub struct UnlockRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct RenewLockRequest {
+    pub file_path: String,
+    pub owner_id: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ForceUnlockRequest {
     pub file_path: String,
 }
@@ -79,6 +85,27 @@ pub async fn unlock_file(
         .await
     {
         Ok(_) => (StatusCode::OK, Json(ApiResponse::ok(()))),
+        Err(e) => (StatusCode::FORBIDDEN, Json(ApiResponse::err(e))),
+    }
+}
+
+/// POST /v2/locks/renew
+/// Renew lock lease (owner only)
+pub async fn renew_lock_file(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<RenewLockRequest>,
+) -> (StatusCode, Json<ApiResponse<FileLock>>) {
+    if let Err((status, message)) = require_permission(&state, &headers, Permission::Lock).await {
+        return (status, Json(ApiResponse::err(message)));
+    }
+
+    match state
+        .lock_manager
+        .renew_lock(&payload.file_path, &payload.owner_id)
+        .await
+    {
+        Ok(lock) => (StatusCode::OK, Json(ApiResponse::ok(lock))),
         Err(e) => (StatusCode::FORBIDDEN, Json(ApiResponse::err(e))),
     }
 }

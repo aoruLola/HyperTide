@@ -76,6 +76,14 @@ paths:
         - BearerAuth: []
       responses:
         '200': { description: Unlocked }
+  /v2/locks/renew:
+    post:
+      summary: Renew file lock lease
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Renewed }
   /v2/locks/force-release:
     post:
       summary: Force release lock

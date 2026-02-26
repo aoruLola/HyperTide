@@ -19,7 +19,7 @@ use crate::api::auth::{
     verify_key,
 };
 use crate::api::blobs::{missing_chunks, upload_chunk};
-use crate::api::lock::{force_unlock_file, list_locks, lock_file, unlock_file};
+use crate::api::lock::{force_unlock_file, list_locks, lock_file, renew_lock_file, unlock_file};
 use crate::api::manifests::create_manifest;
 use crate::api::storage::{calculate_hash, check_exists, download_file, upload_file};
 use crate::api::versioning::{
@@ -89,6 +89,7 @@ fn build_app(state: AppState) -> Router {
         .route("/health/ready", get(health_ready))
         .route("/v2/locks/acquire", post(lock_file))
         .route("/v2/locks/release", post(unlock_file))
+        .route("/v2/locks/renew", post(renew_lock_file))
         .route("/v2/locks/force-release", post(force_unlock_file))
         .route("/v2/locks", get(list_locks))
         .route("/v2/storage/upload", post(upload_file))

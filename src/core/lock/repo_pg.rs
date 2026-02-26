@@ -14,6 +14,7 @@ struct LockRow {
     file_path: String,
     owner_id: String,
     locked_at: DateTime<Utc>,
+    lease_expires_at: Option<DateTime<Utc>>,
 }
 
 impl LockRepoPg {
@@ -24,7 +25,7 @@ impl LockRepoPg {
     pub async fn load_locks(&self) -> Result<Vec<FileLock>, sqlx::Error> {
         let rows = sqlx::query_as::<_, LockRow>(
             r#"
-            SELECT file_path, owner_id, locked_at
+            SELECT file_path, owner_id, locked_at, lease_expires_at
             FROM locks
             WHERE force_released = FALSE
             "#,
@@ -38,6 +39,7 @@ impl LockRepoPg {
                 file_path: row.file_path,
                 owner_id: row.owner_id,
                 locked_at: row.locked_at,
+                lease_expires_at: row.lease_expires_at,
             })
             .collect())
     }
@@ -45,18 +47,20 @@ impl LockRepoPg {
     pub async fn upsert_lock(&self, lock: &FileLock) -> Result<(), sqlx::Error> {
         sqlx::query(
             r#"
-            INSERT INTO locks (file_path, owner_id, locked_at, force_released)
-            VALUES ($1, $2, $3, FALSE)
+            INSERT INTO locks (file_path, owner_id, locked_at, lease_expires_at, force_released)
+            VALUES ($1, $2, $3, $4, FALSE)
             ON CONFLICT (file_path)
             DO UPDATE SET
                 owner_id = EXCLUDED.owner_id,
                 locked_at = EXCLUDED.locked_at,
+                lease_expires_at = EXCLUDED.lease_expires_at,
                 force_released = FALSE
             "#,
         )
         .bind(&lock.file_path)
         .bind(&lock.owner_id)
         .bind(lock.locked_at)
+        .bind(lock.lease_expires_at)
         .execute(&self.pool)
         .await?;
         Ok(())
