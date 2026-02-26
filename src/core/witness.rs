@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{FromRow, PgPool};
+use std::collections::HashSet;
 
 use crate::core::checkpoint::CheckpointRecord;
 
@@ -8,6 +9,7 @@ use crate::core::checkpoint::CheckpointRecord;
 struct WitnessKey {
     id: String,
     secret: String,
+    scope: String,
 }
 
 #[derive(Debug, Clone, Serialize, FromRow)]
@@ -24,12 +26,21 @@ pub struct WitnessSummary {
     pub receipts: Vec<WitnessReceipt>,
     pub quorum: usize,
     pub quorum_met: bool,
+    pub distinct_scopes: Vec<String>,
+    pub cross_scope_quorum_met: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WitnessScopeEntry {
+    pub witness_id: String,
+    pub scope: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WitnessTopology {
     pub scope: String,
     pub witness_ids: Vec<String>,
+    pub witness_scopes: Vec<WitnessScopeEntry>,
     pub quorum: usize,
 }
 
@@ -43,22 +54,30 @@ pub struct WitnessService {
 
 impl WitnessService {
     pub fn from_env(pool: PgPool) -> Self {
-        // format: "w1:secret1,w2:secret2,w3:secret3"
+        // format: "w1:secret1:scope1,w2:secret2:scope2"
         let configured = std::env::var("WITNESS_KEYS").unwrap_or_else(|_| {
             "witness-a:dev-secret-a,witness-b:dev-secret-b,witness-c:dev-secret-c".to_string()
         });
+        let default_scope =
+            std::env::var("WITNESS_DEFAULT_SCOPE").unwrap_or_else(|_| "local".to_string());
         let mut witnesses = configured
             .split(',')
             .filter_map(|item| {
-                let mut parts = item.splitn(2, ':');
+                let mut parts = item.splitn(3, ':');
                 let id = parts.next()?.trim();
                 let secret = parts.next()?.trim();
+                let scope = parts
+                    .next()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| default_scope.clone());
                 if id.is_empty() || secret.is_empty() {
                     return None;
                 }
                 Some(WitnessKey {
                     id: id.to_string(),
                     secret: secret.to_string(),
+                    scope,
                 })
             })
             .collect::<Vec<_>>();
@@ -67,14 +86,17 @@ impl WitnessService {
                 WitnessKey {
                     id: "witness-a".to_string(),
                     secret: "dev-secret-a".to_string(),
+                    scope: default_scope.clone(),
                 },
                 WitnessKey {
                     id: "witness-b".to_string(),
                     secret: "dev-secret-b".to_string(),
+                    scope: default_scope.clone(),
                 },
                 WitnessKey {
                     id: "witness-c".to_string(),
                     secret: "dev-secret-c".to_string(),
+                    scope: default_scope,
                 },
             ];
         }
@@ -175,10 +197,26 @@ impl WitnessService {
         .await
         .map_err(|error| format!("failed to query witness receipts: {error}"))?;
 
+        let mut scopes = HashSet::new();
+        for receipt in &receipts {
+            if let Some(scope) = self
+                .witnesses
+                .iter()
+                .find(|w| w.id == receipt.witness_id)
+                .map(|w| w.scope.clone())
+            {
+                scopes.insert(scope);
+            }
+        }
+        let mut distinct_scopes = scopes.into_iter().collect::<Vec<_>>();
+        distinct_scopes.sort();
+
         Ok(WitnessSummary {
             checkpoint_id: checkpoint_id.to_string(),
             quorum: self.quorum,
             quorum_met: receipts.len() >= self.quorum,
+            cross_scope_quorum_met: receipts.len() >= self.quorum && distinct_scopes.len() >= 2,
+            distinct_scopes,
             receipts,
         })
     }
@@ -187,6 +225,14 @@ impl WitnessService {
         WitnessTopology {
             scope: self.scope.clone(),
             witness_ids: self.witnesses.iter().map(|w| w.id.clone()).collect(),
+            witness_scopes: self
+                .witnesses
+                .iter()
+                .map(|w| WitnessScopeEntry {
+                    witness_id: w.id.clone(),
+                    scope: w.scope.clone(),
+                })
+                .collect(),
             quorum: self.quorum,
         }
     }
