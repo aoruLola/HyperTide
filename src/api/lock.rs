@@ -12,6 +12,7 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
+use serde_json::json;
 
 #[derive(Debug, Deserialize)]
 pub struct LockRequest {
@@ -63,7 +64,23 @@ pub async fn lock_file(
         .try_lock(payload.file_path, payload.owner_id)
         .await
     {
-        Ok(lock) => (StatusCode::OK, Json(ApiResponse::ok(lock))),
+        Ok(lock) => {
+            if let Some(event_store) = &state.event_store {
+                if let Err(error) = event_store
+                    .append(
+                        "LOCK_ACQUIRED",
+                        &lock.owner_id,
+                        None,
+                        None,
+                        json!({ "file_path": lock.file_path, "lease_expires_at": lock.lease_expires_at }),
+                    )
+                    .await
+                {
+                    tracing::warn!("failed to append lock acquire event: {error}");
+                }
+            }
+            (StatusCode::OK, Json(ApiResponse::ok(lock)))
+        }
         Err(e) => (StatusCode::CONFLICT, Json(ApiResponse::err(e))),
     }
 }
@@ -84,7 +101,23 @@ pub async fn unlock_file(
         .unlock(&payload.file_path, &payload.owner_id)
         .await
     {
-        Ok(_) => (StatusCode::OK, Json(ApiResponse::ok(()))),
+        Ok(_) => {
+            if let Some(event_store) = &state.event_store {
+                if let Err(error) = event_store
+                    .append(
+                        "LOCK_RELEASED",
+                        &payload.owner_id,
+                        None,
+                        None,
+                        json!({ "file_path": payload.file_path }),
+                    )
+                    .await
+                {
+                    tracing::warn!("failed to append lock release event: {error}");
+                }
+            }
+            (StatusCode::OK, Json(ApiResponse::ok(())))
+        }
         Err(e) => (StatusCode::FORBIDDEN, Json(ApiResponse::err(e))),
     }
 }
@@ -105,7 +138,23 @@ pub async fn renew_lock_file(
         .renew_lock(&payload.file_path, &payload.owner_id)
         .await
     {
-        Ok(lock) => (StatusCode::OK, Json(ApiResponse::ok(lock))),
+        Ok(lock) => {
+            if let Some(event_store) = &state.event_store {
+                if let Err(error) = event_store
+                    .append(
+                        "LOCK_RENEWED",
+                        &payload.owner_id,
+                        None,
+                        None,
+                        json!({ "file_path": payload.file_path, "lease_expires_at": lock.lease_expires_at }),
+                    )
+                    .await
+                {
+                    tracing::warn!("failed to append lock renew event: {error}");
+                }
+            }
+            (StatusCode::OK, Json(ApiResponse::ok(lock)))
+        }
         Err(e) => (StatusCode::FORBIDDEN, Json(ApiResponse::err(e))),
     }
 }
@@ -122,7 +171,23 @@ pub async fn force_unlock_file(
     }
 
     match state.lock_manager.force_unlock(&payload.file_path).await {
-        Ok(true) => (StatusCode::OK, Json(ApiResponse::ok(true))),
+        Ok(true) => {
+            if let Some(event_store) = &state.event_store {
+                if let Err(error) = event_store
+                    .append(
+                        "LOCK_FORCE_RELEASED",
+                        "system-admin",
+                        None,
+                        None,
+                        json!({ "file_path": payload.file_path }),
+                    )
+                    .await
+                {
+                    tracing::warn!("failed to append lock force-release event: {error}");
+                }
+            }
+            (StatusCode::OK, Json(ApiResponse::ok(true)))
+        }
         Ok(false) => (
             StatusCode::NOT_FOUND,
             Json(ApiResponse::err("File was not locked")),

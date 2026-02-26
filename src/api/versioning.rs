@@ -4,6 +4,7 @@
     Json,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::api::common::ApiResponse;
 use crate::api::middleware::authz;
@@ -299,7 +300,31 @@ pub async fn submit_changeset(
     };
 
     match state.version_manager.submit_changeset(input).await {
-        Ok(changeset) => (StatusCode::CREATED, Json(ApiResponse::ok(changeset))),
+        Ok(changeset) => {
+            if let Some(event_store) = &state.event_store {
+                let event_type = match changeset.status {
+                    crate::core::versioning::ChangesetStatus::Draft => "CHANGESET_CREATED_DRAFT",
+                    _ => "CHANGESET_VISIBLE",
+                };
+                if let Err(error) = event_store
+                    .append(
+                        event_type,
+                        &identity.owner_id,
+                        Some(&changeset.repo_id),
+                        Some(&changeset.changeset_id),
+                        json!({
+                            "branch": changeset.branch,
+                            "status": changeset.status,
+                            "base_changeset_id": changeset.base_changeset_id,
+                        }),
+                    )
+                    .await
+                {
+                    tracing::warn!("failed to append submit changeset event: {error}");
+                }
+            }
+            (StatusCode::CREATED, Json(ApiResponse::ok(changeset)))
+        }
         Err(error) => {
             let (status, message) = map_versioning_error(error);
             (status, Json(ApiResponse::err(message)))
@@ -385,17 +410,36 @@ pub async fn rollback(
     };
 
     match state.version_manager.submit_changeset(input).await {
-        Ok(changeset) => (
-            StatusCode::CREATED,
-            Json(ApiResponse::ok(RollbackResponse {
-                rollback_plan: RollbackPlanView {
-                    base_changeset_id: plan.base_changeset_id,
-                    target_changeset_id: plan.target_changeset_id,
-                    asset_count: plan.assets.len(),
-                },
-                changeset,
-            })),
-        ),
+        Ok(changeset) => {
+            if let Some(event_store) = &state.event_store {
+                if let Err(error) = event_store
+                    .append(
+                        "ROLLBACK_VISIBLE",
+                        &identity.owner_id,
+                        Some(&changeset.repo_id),
+                        Some(&changeset.changeset_id),
+                        json!({
+                            "branch": changeset.branch,
+                            "target_changeset_id": plan.target_changeset_id,
+                        }),
+                    )
+                    .await
+                {
+                    tracing::warn!("failed to append rollback event: {error}");
+                }
+            }
+            (
+                StatusCode::CREATED,
+                Json(ApiResponse::ok(RollbackResponse {
+                    rollback_plan: RollbackPlanView {
+                        base_changeset_id: plan.base_changeset_id,
+                        target_changeset_id: plan.target_changeset_id,
+                        asset_count: plan.assets.len(),
+                    },
+                    changeset,
+                })),
+            )
+        }
         Err(error) => {
             let (status, message) = map_versioning_error(error);
             (status, Json(ApiResponse::err(message)))
@@ -420,7 +464,26 @@ pub async fn approve_changeset(
         .approve_changeset(&query.repo_id, &changeset_id, &identity.owner_id)
         .await
     {
-        Ok(changeset) => (StatusCode::OK, Json(ApiResponse::ok(changeset))),
+        Ok(changeset) => {
+            if let Some(event_store) = &state.event_store {
+                if let Err(error) = event_store
+                    .append(
+                        "CHANGESET_APPROVED",
+                        &identity.owner_id,
+                        Some(&changeset.repo_id),
+                        Some(&changeset.changeset_id),
+                        json!({
+                            "branch": changeset.branch,
+                            "status": changeset.status,
+                        }),
+                    )
+                    .await
+                {
+                    tracing::warn!("failed to append approve event: {error}");
+                }
+            }
+            (StatusCode::OK, Json(ApiResponse::ok(changeset)))
+        }
         Err(error) => {
             let (status, message) = map_versioning_error(error);
             (status, Json(ApiResponse::err(message)))
@@ -445,7 +508,27 @@ pub async fn promote_changeset(
         .promote_changeset(&query.repo_id, &changeset_id, &identity.owner_id)
         .await
     {
-        Ok(changeset) => (StatusCode::OK, Json(ApiResponse::ok(changeset))),
+        Ok(changeset) => {
+            if let Some(event_store) = &state.event_store {
+                if let Err(error) = event_store
+                    .append(
+                        "CHANGESET_PROMOTED",
+                        &identity.owner_id,
+                        Some(&changeset.repo_id),
+                        Some(&changeset.changeset_id),
+                        json!({
+                            "branch": changeset.branch,
+                            "status": changeset.status,
+                            "promoted_at": changeset.promoted_at,
+                        }),
+                    )
+                    .await
+                {
+                    tracing::warn!("failed to append promote event: {error}");
+                }
+            }
+            (StatusCode::OK, Json(ApiResponse::ok(changeset)))
+        }
         Err(error) => {
             let (status, message) = map_versioning_error(error);
             (status, Json(ApiResponse::err(message)))

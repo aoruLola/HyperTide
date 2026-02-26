@@ -28,6 +28,7 @@ use crate::api::versioning::{
 };
 use crate::core::auth::AuthManager;
 use crate::core::db::{migrations::run_migrations, pool::init_pg_pool_from_env};
+use crate::core::events::EventStore;
 use crate::core::lock::LockManager;
 use crate::core::storage::StorageManager;
 use crate::core::versioning::VersionManager;
@@ -50,6 +51,7 @@ pub struct AppState {
     pub storage_manager: StorageManager,
     pub auth_manager: AuthManager,
     pub version_manager: VersionManager,
+    pub event_store: Option<EventStore>,
     pub db_pool: Option<PgPool>,
 }
 
@@ -182,6 +184,7 @@ async fn main() {
         storage_manager,
         auth_manager,
         version_manager,
+        event_store: Some(EventStore::new(db_pool.clone())),
         db_pool: Some(db_pool),
     };
 
@@ -238,6 +241,7 @@ mod tests {
             storage_manager: StorageManager::new("./storage"),
             auth_manager: AuthManager::with_dev_key(DEV_MASTER_KEY),
             version_manager: VersionManager::new(),
+            event_store: None,
             db_pool: None,
         }
     }
