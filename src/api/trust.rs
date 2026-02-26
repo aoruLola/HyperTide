@@ -12,7 +12,7 @@ use crate::core::{
     checkpoint::CheckpointRecord,
     compliance::RetentionPolicy,
     replay::{ReplayReadinessReport, ReplayVerification},
-    witness::{WitnessReceipt, WitnessSummary},
+    witness::{WitnessReceipt, WitnessSummary, WitnessTopology},
 };
 use crate::AppState;
 
@@ -260,4 +260,22 @@ pub async fn retention_policy(
     }
 
     (StatusCode::OK, Json(ApiResponse::ok(state.retention_policy.clone())))
+}
+
+pub async fn witness_topology(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<ApiResponse<WitnessTopology>>) {
+    if let Err((status, message)) = require_permission(&state, &headers, Permission::Admin).await {
+        return (status, Json(ApiResponse::err(message)));
+    }
+
+    let Some(service) = &state.witness_service else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse::err("witness service unavailable")),
+        );
+    };
+
+    (StatusCode::OK, Json(ApiResponse::ok(service.topology())))
 }

@@ -26,11 +26,19 @@ pub struct WitnessSummary {
     pub quorum_met: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct WitnessTopology {
+    pub scope: String,
+    pub witness_ids: Vec<String>,
+    pub quorum: usize,
+}
+
 #[derive(Clone)]
 pub struct WitnessService {
     pool: PgPool,
     witnesses: Vec<WitnessKey>,
     quorum: usize,
+    scope: String,
 }
 
 impl WitnessService {
@@ -76,11 +84,14 @@ impl WitnessService {
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(2)
             .clamp(1, witnesses.len());
+        let scope =
+            std::env::var("WITNESS_SCOPE").unwrap_or_else(|_| "single-env".to_string());
 
         Self {
             pool,
             witnesses,
             quorum,
+            scope,
         }
     }
 
@@ -170,5 +181,13 @@ impl WitnessService {
             quorum_met: receipts.len() >= self.quorum,
             receipts,
         })
+    }
+
+    pub fn topology(&self) -> WitnessTopology {
+        WitnessTopology {
+            scope: self.scope.clone(),
+            witness_ids: self.witnesses.iter().map(|w| w.id.clone()).collect(),
+            quorum: self.quorum,
+        }
     }
 }

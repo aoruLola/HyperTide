@@ -25,6 +25,7 @@ use crate::api::storage::{calculate_hash, check_exists, download_file, upload_fi
 use crate::api::trust::{
     attest_checkpoint, export_audit_entries, generate_checkpoint, latest_checkpoint,
     replay_readiness, retention_policy, verify_audit_chain, verify_replay, witness_summary,
+    witness_topology,
 };
 use crate::api::versioning::{
     approve_changeset, changeset_gate, create_branch, list_branches, list_history,
@@ -147,6 +148,7 @@ fn build_app(state: AppState) -> Router {
             post(attest_checkpoint),
         )
         .route("/v2/trust/witness/summary", get(witness_summary))
+        .route("/v2/trust/witness/topology", get(witness_topology))
         .route("/v2/trust/audit/verify", post(verify_audit_chain))
         .route("/v2/trust/audit/export", get(export_audit_entries))
         .route("/v2/trust/retention/policy", get(retention_policy))
@@ -481,5 +483,32 @@ mod tests {
 
         let response = app.oneshot(request).await.expect("response");
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn witness_topology_rejects_missing_api_key() {
+        let app = build_app(test_state());
+
+        let request = Request::builder()
+            .uri("/v2/trust/witness/topology")
+            .body(Body::empty())
+            .expect("request");
+
+        let response = app.oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn witness_topology_returns_503_when_service_unavailable() {
+        let app = build_app(test_state());
+
+        let request = Request::builder()
+            .uri("/v2/trust/witness/topology")
+            .header("X-API-Key", DEV_MASTER_KEY)
+            .body(Body::empty())
+            .expect("request");
+
+        let response = app.oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }
