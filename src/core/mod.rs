@@ -6,3 +6,4 @@ pub mod events;
 pub mod lock;
 pub mod storage;
 pub mod versioning;
+pub mod witness;

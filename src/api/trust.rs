@@ -1,11 +1,16 @@
 use axum::{
-    extract::State,
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
+use serde::Deserialize;
 
 use crate::api::{common::ApiResponse, middleware::authz};
-use crate::core::{auth::Permission, checkpoint::CheckpointRecord};
+use crate::core::{
+    auth::Permission,
+    checkpoint::CheckpointRecord,
+    witness::{WitnessReceipt, WitnessSummary},
+};
 use crate::AppState;
 
 async fn require_permission(
@@ -68,5 +73,62 @@ pub async fn latest_checkpoint(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiResponse::err(format!("failed to load checkpoint: {error}"))),
         ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AttestRequest {
+    pub witness_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WitnessSummaryQuery {
+    pub checkpoint_id: String,
+}
+
+pub async fn attest_checkpoint(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(checkpoint_id): Path<String>,
+    Json(payload): Json<AttestRequest>,
+) -> (StatusCode, Json<ApiResponse<WitnessReceipt>>) {
+    if let Err((status, message)) = require_permission(&state, &headers, Permission::Admin).await {
+        return (status, Json(ApiResponse::err(message)));
+    }
+    let Some(service) = &state.witness_service else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse::err("witness service unavailable")),
+        );
+    };
+
+    match service
+        .attest(&checkpoint_id, payload.witness_id.as_deref())
+        .await
+    {
+        Ok(receipt) => (StatusCode::OK, Json(ApiResponse::ok(receipt))),
+        Err(message) => (StatusCode::BAD_REQUEST, Json(ApiResponse::err(message))),
+    }
+}
+
+pub async fn witness_summary(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WitnessSummaryQuery>,
+) -> (StatusCode, Json<ApiResponse<WitnessSummary>>) {
+    if let Err((status, message)) = require_permission(&state, &headers, Permission::Download).await
+    {
+        return (status, Json(ApiResponse::err(message)));
+    }
+    let Some(service) = &state.witness_service else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse::err("witness service unavailable")),
+        );
+    };
+
+    match service.summary(&query.checkpoint_id).await {
+        Ok(summary) => (StatusCode::OK, Json(ApiResponse::ok(summary))),
+        Err(message) => (StatusCode::BAD_REQUEST, Json(ApiResponse::err(message))),
     }
 }

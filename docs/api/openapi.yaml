@@ -285,6 +285,32 @@ paths:
       responses:
         '200': { description: Latest checkpoint }
         '404': { description: Checkpoint not found }
+  /v2/trust/checkpoints/{checkpoint_id}/witness/attest:
+    post:
+      summary: Add witness receipt for checkpoint
+      parameters:
+        - in: path
+          name: checkpoint_id
+          required: true
+          schema: { type: string }
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Witness receipt recorded }
+  /v2/trust/witness/summary:
+    get:
+      summary: Get witness quorum summary
+      parameters:
+        - in: query
+          name: checkpoint_id
+          required: true
+          schema: { type: string }
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200': { description: Witness summary }
 components:
   securitySchemes:
     ApiKeyAuth:

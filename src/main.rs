@@ -22,7 +22,7 @@ use crate::api::blobs::{missing_chunks, upload_chunk};
 use crate::api::lock::{force_unlock_file, list_locks, lock_file, renew_lock_file, unlock_file};
 use crate::api::manifests::create_manifest;
 use crate::api::storage::{calculate_hash, check_exists, download_file, upload_file};
-use crate::api::trust::{generate_checkpoint, latest_checkpoint};
+use crate::api::trust::{attest_checkpoint, generate_checkpoint, latest_checkpoint, witness_summary};
 use crate::api::versioning::{
     approve_changeset, create_branch, list_branches, list_history, promote_changeset, rollback,
     submit_changeset, sync_snapshot,
@@ -35,6 +35,7 @@ use crate::core::events::EventStore;
 use crate::core::lock::LockManager;
 use crate::core::storage::StorageManager;
 use crate::core::versioning::VersionManager;
+use crate::core::witness::WitnessService;
 
 const VERSION: &str = "Surface 26.0.1 Preview";
 const DEV_MASTER_KEY: &str = "dev-master-key";
@@ -57,6 +58,7 @@ pub struct AppState {
     pub event_store: Option<EventStore>,
     pub audit_chain: Option<AuditChain>,
     pub checkpoint_service: Option<CheckpointService>,
+    pub witness_service: Option<WitnessService>,
     pub db_pool: Option<PgPool>,
 }
 
@@ -130,6 +132,11 @@ fn build_app(state: AppState) -> Router {
         .route("/v2/sync/:repo_id", get(sync_snapshot))
         .route("/v2/trust/checkpoints/generate", post(generate_checkpoint))
         .route("/v2/trust/checkpoints/latest", get(latest_checkpoint))
+        .route(
+            "/v2/trust/checkpoints/:checkpoint_id/witness/attest",
+            post(attest_checkpoint),
+        )
+        .route("/v2/trust/witness/summary", get(witness_summary))
         .layer(cors)
         .with_state(state)
 }
@@ -200,6 +207,7 @@ async fn main() {
         event_store: Some(EventStore::new(db_pool.clone())),
         audit_chain: Some(AuditChain::new(db_pool.clone())),
         checkpoint_service: Some(CheckpointService::new(db_pool.clone())),
+        witness_service: Some(WitnessService::from_env(db_pool.clone())),
         db_pool: Some(db_pool),
     };
 
@@ -262,6 +270,7 @@ mod tests {
             event_store: None,
             audit_chain: None,
             checkpoint_service: None,
+            witness_service: None,
             db_pool: None,
         }
     }
