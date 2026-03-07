@@ -1,7 +1,8 @@
-pub mod auth;
 pub mod audit_chain;
+pub mod auth;
 pub mod checkpoint;
 pub mod compliance;
+pub mod config;
 pub mod db;
 pub mod events;
 pub mod high_risk;

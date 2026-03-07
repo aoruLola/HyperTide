@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -54,37 +55,46 @@ impl LockManager {
 
     /// Attempt to lock a file. Returns true if successful, false if already locked by someone else.
     pub async fn try_lock(&self, file_path: String, owner_id: String) -> Result<FileLock, String> {
-        if let Some(existing) = self.locks.get(&file_path).map(|entry| entry.clone()) {
-            if self.is_expired(&existing) {
-                if let Some(repo) = &self.repo {
-                    repo.delete_lock(&file_path)
-                        .await
-                        .map_err(|e| format!("failed to cleanup expired lock: {e}"))?;
-                }
-                self.locks.remove(&file_path);
-            } else if existing.owner_id != owner_id {
-                return Err(format!("File is already locked by {}", existing.owner_id));
-            } else {
-                // Idempotent: if already locked by me, return success
-                return Ok(existing);
-            }
-        }
-
-        let lock = FileLock {
+        let requested_lock = FileLock {
             file_path: file_path.clone(),
-            owner_id,
+            owner_id: owner_id.clone(),
             locked_at: Utc::now(),
             lease_expires_at: Some(self.next_lease_expiry()),
         };
 
         if let Some(repo) = &self.repo {
-            repo.upsert_lock(&lock)
+            let effective_lock = repo
+                .acquire_lock_atomic(&requested_lock)
                 .await
                 .map_err(|e| format!("failed to persist lock: {e}"))?;
+            self.locks
+                .insert(effective_lock.file_path.clone(), effective_lock.clone());
+            if effective_lock.owner_id != owner_id {
+                return Err(format!(
+                    "File is already locked by {}",
+                    effective_lock.owner_id
+                ));
+            }
+            return Ok(effective_lock);
         }
 
-        self.locks.insert(file_path, lock.clone());
-        Ok(lock)
+        match self.locks.entry(file_path.clone()) {
+            Entry::Occupied(mut occupied) => {
+                let existing = occupied.get().clone();
+                if self.is_expired(&existing) {
+                    occupied.insert(requested_lock.clone());
+                    Ok(requested_lock)
+                } else if existing.owner_id != owner_id {
+                    Err(format!("File is already locked by {}", existing.owner_id))
+                } else {
+                    Ok(existing)
+                }
+            }
+            Entry::Vacant(vacant) => {
+                vacant.insert(requested_lock.clone());
+                Ok(requested_lock)
+            }
+        }
     }
 
     pub async fn renew_lock(&self, file_path: &str, owner_id: &str) -> Result<FileLock, String> {

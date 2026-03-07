@@ -210,14 +210,14 @@ pub async fn generate_key(
             (
                 StatusCode::CREATED,
                 Json(ApiResponse::ok(GenerateKeyResponse {
-                key: api_key.key,
-                owner_id: api_key.owner_id,
-                permissions: api_key
-                    .permissions
-                    .iter()
-                    .map(permission_to_string)
-                    .collect(),
-                expires_at: api_key.expires_at.map(|dt| dt.to_rfc3339()),
+                    key: api_key.key,
+                    owner_id: api_key.owner_id,
+                    permissions: api_key
+                        .permissions
+                        .iter()
+                        .map(permission_to_string)
+                        .collect(),
+                    expires_at: api_key.expires_at.map(|dt| dt.to_rfc3339()),
                 })),
             )
         }
@@ -392,14 +392,8 @@ pub async fn revoke_refresh_token(
             )
             .await;
             if revoked {
-                append_auth_audit(
-                    &state,
-                    "REFRESH_REVOKED",
-                    "refresh-token",
-                    None,
-                    json!({}),
-                )
-                .await;
+                append_auth_audit(&state, "REFRESH_REVOKED", "refresh-token", None, json!({}))
+                    .await;
             }
             (
                 StatusCode::OK,

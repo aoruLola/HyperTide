@@ -663,7 +663,10 @@ pub async fn changeset_gate(
         return (status, Json(ApiResponse::err(message)));
     }
 
-    match state.version_manager.changeset_gate(&query.repo_id, &changeset_id) {
+    match state
+        .version_manager
+        .changeset_gate(&query.repo_id, &changeset_id)
+    {
         Ok(gate) => (StatusCode::OK, Json(ApiResponse::ok(gate))),
         Err(error) => {
             let (status, message) = map_versioning_error(error);

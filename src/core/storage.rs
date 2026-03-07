@@ -91,10 +91,14 @@ impl StorageManager {
             .await
             .map_err(|e| format!("Failed to sync file: {}", e))?;
 
-        // Atomic rename
-        fs::rename(&temp_path, &object_path)
-            .await
-            .map_err(|e| format!("Failed to move file to storage: {}", e))?;
+        // Atomic rename. If another writer already won the race, treat as idempotent success.
+        if let Err(rename_error) = fs::rename(&temp_path, &object_path).await {
+            if object_path.exists() {
+                let _ = fs::remove_file(&temp_path).await;
+            } else {
+                return Err(format!("Failed to move file to storage: {}", rename_error));
+            }
+        }
 
         Ok(StoredFile {
             hash,

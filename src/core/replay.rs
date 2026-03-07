@@ -171,15 +171,15 @@ impl ReplayService {
             );
         }
 
-        let current_locks = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM locks WHERE force_released = FALSE",
+        let current_locks =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM locks WHERE force_released = FALSE")
+                .fetch_one(&self.pool)
+                .await?;
+        let current_visible_changesets = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM changesets WHERE status = 'visible'",
         )
         .fetch_one(&self.pool)
         .await?;
-        let current_visible_changesets =
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM changesets WHERE status = 'visible'")
-                .fetch_one(&self.pool)
-                .await?;
 
         let mut mismatches = Vec::new();
         if replay.current_locks.len() as i64 != current_locks {
@@ -246,9 +246,10 @@ impl ReplayService {
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM audit_chain_entries")
                 .fetch_one(&self.pool)
                 .await?;
-        let checkpoint_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM trust_checkpoints")
-            .fetch_one(&self.pool)
-            .await?;
+        let checkpoint_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM trust_checkpoints")
+                .fetch_one(&self.pool)
+                .await?;
         let witness_receipt_count =
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM witness_receipts")
                 .fetch_one(&self.pool)
@@ -336,8 +337,18 @@ mod tests {
     fn rebuilds_visible_changeset_state_from_events() {
         let mut acc = ReplayAccumulator::default();
 
-        acc.apply_event("CHANGESET_VISIBLE", Some(&json!({})), Some("cs_visible"), None);
-        acc.apply_event("CHANGESET_APPROVED", Some(&json!({})), Some("cs_draft"), None);
+        acc.apply_event(
+            "CHANGESET_VISIBLE",
+            Some(&json!({})),
+            Some("cs_visible"),
+            None,
+        );
+        acc.apply_event(
+            "CHANGESET_APPROVED",
+            Some(&json!({})),
+            Some("cs_draft"),
+            None,
+        );
         acc.apply_event(
             "CHANGESET_PROMOTED",
             Some(&json!({})),
@@ -374,6 +385,9 @@ mod tests {
             Some("repo-a"),
         );
 
-        assert_eq!(acc.branch_heads.get("repo-a::main"), Some(&"cs2".to_string()));
+        assert_eq!(
+            acc.branch_heads.get("repo-a::main"),
+            Some(&"cs2".to_string())
+        );
     }
 }

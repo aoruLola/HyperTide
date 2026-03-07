@@ -1,9 +1,9 @@
-﻿//! Lock API Handlers
+//! Lock API Handlers
 //! HTTP endpoints for file locking operations
 
 use crate::api::common::ApiResponse;
 use crate::api::middleware::authz;
-use crate::core::auth::Permission;
+use crate::core::auth::{AuthIdentity, Permission};
 use crate::core::lock::FileLock;
 use crate::AppState;
 use axum::{
@@ -17,19 +17,19 @@ use serde_json::json;
 #[derive(Debug, Deserialize)]
 pub struct LockRequest {
     pub file_path: String,
-    pub owner_id: String,
+    pub owner_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UnlockRequest {
     pub file_path: String,
-    pub owner_id: String,
+    pub owner_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct RenewLockRequest {
     pub file_path: String,
-    pub owner_id: String,
+    pub owner_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,11 +41,20 @@ async fn require_permission(
     state: &AppState,
     headers: &HeaderMap,
     permission: Permission,
-) -> Result<(), (StatusCode, String)> {
-    authz::require_permission(state, headers, permission)
-        .await
-        .map(|_| ())?;
-    Ok(())
+) -> Result<AuthIdentity, (StatusCode, String)> {
+    authz::require_permission(state, headers, permission).await
+}
+
+fn resolve_owner_id(
+    payload_owner_id: Option<&str>,
+    identity: &AuthIdentity,
+) -> Result<String, (StatusCode, String)> {
+    if let Some(owner_id) = payload_owner_id {
+        if owner_id != identity.owner_id {
+            return Err((StatusCode::FORBIDDEN, "owner_id mismatch".to_string()));
+        }
+    }
+    Ok(identity.owner_id.clone())
 }
 
 /// POST /v2/locks/acquire
@@ -55,13 +64,18 @@ pub async fn lock_file(
     headers: HeaderMap,
     Json(payload): Json<LockRequest>,
 ) -> (StatusCode, Json<ApiResponse<FileLock>>) {
-    if let Err((status, message)) = require_permission(&state, &headers, Permission::Lock).await {
-        return (status, Json(ApiResponse::err(message)));
-    }
+    let identity = match require_permission(&state, &headers, Permission::Lock).await {
+        Ok(identity) => identity,
+        Err((status, message)) => return (status, Json(ApiResponse::err(message))),
+    };
+    let owner_id = match resolve_owner_id(payload.owner_id.as_deref(), &identity) {
+        Ok(owner_id) => owner_id,
+        Err((status, message)) => return (status, Json(ApiResponse::err(message))),
+    };
 
     match state
         .lock_manager
-        .try_lock(payload.file_path, payload.owner_id)
+        .try_lock(payload.file_path, owner_id)
         .await
     {
         Ok(lock) => {
@@ -92,13 +106,18 @@ pub async fn unlock_file(
     headers: HeaderMap,
     Json(payload): Json<UnlockRequest>,
 ) -> (StatusCode, Json<ApiResponse<()>>) {
-    if let Err((status, message)) = require_permission(&state, &headers, Permission::Lock).await {
-        return (status, Json(ApiResponse::err(message)));
-    }
+    let identity = match require_permission(&state, &headers, Permission::Lock).await {
+        Ok(identity) => identity,
+        Err((status, message)) => return (status, Json(ApiResponse::err(message))),
+    };
+    let owner_id = match resolve_owner_id(payload.owner_id.as_deref(), &identity) {
+        Ok(owner_id) => owner_id,
+        Err((status, message)) => return (status, Json(ApiResponse::err(message))),
+    };
 
     match state
         .lock_manager
-        .unlock(&payload.file_path, &payload.owner_id)
+        .unlock(&payload.file_path, &owner_id)
         .await
     {
         Ok(_) => {
@@ -106,7 +125,7 @@ pub async fn unlock_file(
                 if let Err(error) = event_store
                     .append(
                         "LOCK_RELEASED",
-                        &payload.owner_id,
+                        &owner_id,
                         None,
                         None,
                         json!({ "file_path": payload.file_path }),
@@ -129,13 +148,18 @@ pub async fn renew_lock_file(
     headers: HeaderMap,
     Json(payload): Json<RenewLockRequest>,
 ) -> (StatusCode, Json<ApiResponse<FileLock>>) {
-    if let Err((status, message)) = require_permission(&state, &headers, Permission::Lock).await {
-        return (status, Json(ApiResponse::err(message)));
-    }
+    let identity = match require_permission(&state, &headers, Permission::Lock).await {
+        Ok(identity) => identity,
+        Err((status, message)) => return (status, Json(ApiResponse::err(message))),
+    };
+    let owner_id = match resolve_owner_id(payload.owner_id.as_deref(), &identity) {
+        Ok(owner_id) => owner_id,
+        Err((status, message)) => return (status, Json(ApiResponse::err(message))),
+    };
 
     match state
         .lock_manager
-        .renew_lock(&payload.file_path, &payload.owner_id)
+        .renew_lock(&payload.file_path, &owner_id)
         .await
     {
         Ok(lock) => {
@@ -143,7 +167,7 @@ pub async fn renew_lock_file(
                 if let Err(error) = event_store
                     .append(
                         "LOCK_RENEWED",
-                        &payload.owner_id,
+                        &owner_id,
                         None,
                         None,
                         json!({ "file_path": payload.file_path, "lease_expires_at": lock.lease_expires_at }),

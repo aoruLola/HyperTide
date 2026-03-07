@@ -134,10 +134,9 @@ impl AuditChain {
                 });
             }
 
-            let payload_hash =
-                blake3::hash(&serde_json::to_vec(&row.payload).unwrap_or_default())
-                    .to_hex()
-                    .to_string();
+            let payload_hash = blake3::hash(&serde_json::to_vec(&row.payload).unwrap_or_default())
+                .to_hex()
+                .to_string();
             let material = format!(
                 "{}|{}|{}|{}|{}|{}|{}",
                 row.prev_hash,

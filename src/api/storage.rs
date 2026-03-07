@@ -98,9 +98,9 @@ pub async fn upload_file(
             (
                 StatusCode::OK,
                 Json(ApiResponse::ok(UploadResponse {
-                hash: stored.hash,
-                size_bytes: stored.size_bytes,
-                original_path: stored.original_path,
+                    hash: stored.hash,
+                    size_bytes: stored.size_bytes,
+                    original_path: stored.original_path,
                 })),
             )
         }

@@ -4,14 +4,17 @@ mod api;
 mod core;
 
 use axum::{
-    extract::{FromRef, State},
+    extract::{DefaultBodyLimit, FromRef, State},
     http::StatusCode,
     routing::{delete, get, post, put},
     Router,
 };
 use sqlx::PgPool;
 use std::net::SocketAddr;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::{
+    cors::{Any, CorsLayer},
+    limit::RequestBodyLimitLayer,
+};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::api::auth::{
@@ -31,10 +34,11 @@ use crate::api::versioning::{
     approve_changeset, changeset_gate, create_branch, list_branches, list_history,
     promote_changeset, rollback, submit_changeset, sync_snapshot,
 };
-use crate::core::auth::AuthManager;
 use crate::core::audit_chain::AuditChain;
+use crate::core::auth::AuthManager;
 use crate::core::checkpoint::CheckpointService;
 use crate::core::compliance::RetentionPolicy;
+use crate::core::config::{AppConfig, AppEnv};
 use crate::core::db::{migrations::run_migrations, pool::init_pg_pool_from_env};
 use crate::core::events::EventStore;
 use crate::core::high_risk::HighRiskGuard;
@@ -45,13 +49,14 @@ use crate::core::versioning::VersionManager;
 use crate::core::witness::WitnessService;
 
 const VERSION: &str = "Surface 26.0.1 Preview";
-const DEV_MASTER_KEY: &str = "dev-master-key";
+const DEFAULT_BODY_LIMIT_BYTES: usize = 2 * 1024 * 1024;
+const UPLOAD_BODY_LIMIT_BYTES: usize = 256 * 1024 * 1024;
 
-fn print_banner() {
+fn print_banner(env: AppEnv) {
     println!();
     println!("==============================================================");
     println!(" HyperTide Backend {}", VERSION);
-    println!(" Dev Master Key: {}", DEV_MASTER_KEY);
+    println!(" Environment: {}", env.as_str());
     println!("==============================================================");
     println!();
 }
@@ -96,13 +101,24 @@ impl FromRef<AppState> for VersionManager {
     }
 }
 
-fn build_app(state: AppState) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+fn build_cors_layer(config: &AppConfig) -> CorsLayer {
+    if config.app_env.is_production() {
+        CorsLayer::new()
+            .allow_origin(config.cors_allowed_origins.clone())
+            .allow_methods(Any)
+            .allow_headers(Any)
+    } else {
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any)
+    }
+}
 
-    Router::new()
+fn build_app(state: AppState, config: &AppConfig) -> Router {
+    let cors = build_cors_layer(config);
+
+    let general_routes = Router::new()
         .route("/", get(root))
         .route("/health", get(health_live))
         .route("/health/live", get(health_live))
@@ -112,12 +128,10 @@ fn build_app(state: AppState) -> Router {
         .route("/v2/locks/renew", post(renew_lock_file))
         .route("/v2/locks/force-release", post(force_unlock_file))
         .route("/v2/locks", get(list_locks))
-        .route("/v2/storage/upload", post(upload_file))
         .route("/v2/storage/download/:hash", get(download_file))
         .route("/v2/storage/exists/:hash", get(check_exists))
         .route("/v2/storage/hash", post(calculate_hash))
         .route("/v2/blobs/missing", post(missing_chunks))
-        .route("/v2/blobs/chunks/:chunk_hash", put(upload_chunk))
         .route("/v2/manifests", post(create_manifest))
         .route("/v2/auth/verify", get(verify_key))
         .route("/v2/auth/generate", post(generate_key))
@@ -154,6 +168,18 @@ fn build_app(state: AppState) -> Router {
         .route("/v2/trust/retention/policy", get(retention_policy))
         .route("/v2/trust/replay/verify", post(verify_replay))
         .route("/v2/trust/replay/readiness", get(replay_readiness))
+        .layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT_BYTES))
+        .layer(RequestBodyLimitLayer::new(DEFAULT_BODY_LIMIT_BYTES));
+
+    let upload_routes = Router::new()
+        .route("/v2/storage/upload", post(upload_file))
+        .route("/v2/blobs/chunks/:chunk_hash", put(upload_chunk))
+        .layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT_BYTES))
+        .layer(RequestBodyLimitLayer::new(UPLOAD_BODY_LIMIT_BYTES));
+
+    Router::new()
+        .merge(general_routes)
+        .merge(upload_routes)
         .layer(cors)
         .with_state(state)
 }
@@ -161,7 +187,15 @@ fn build_app(state: AppState) -> Router {
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
-    print_banner();
+
+    let config = match AppConfig::from_env() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("Configuration error: {error}");
+            return;
+        }
+    };
+    print_banner(config.app_env);
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
@@ -185,21 +219,21 @@ async fn main() {
     }
     tracing::info!("Database ready (pool + migrations)");
 
-    let storage_manager = StorageManager::new("./storage");
+    let storage_manager = StorageManager::new(&config.storage_path);
     if let Err(e) = storage_manager.init().await {
         tracing::error!("Failed to initialize storage: {}", e);
         return;
     }
-    tracing::info!("Storage initialized at ./storage");
+    tracing::info!("Storage initialized at {}", &config.storage_path);
 
-    let auth_manager = match AuthManager::with_dev_key_and_db(DEV_MASTER_KEY, db_pool.clone()).await
-    {
-        Ok(manager) => manager,
-        Err(e) => {
-            tracing::error!("Failed to initialize auth manager: {e}");
-            return;
-        }
-    };
+    let auth_manager =
+        match AuthManager::with_dev_key_and_db(config.master_key.clone(), db_pool.clone()).await {
+            Ok(manager) => manager,
+            Err(e) => {
+                tracing::error!("Failed to initialize auth manager: {e}");
+                return;
+            }
+        };
     let lock_manager = match LockManager::with_pg(db_pool.clone()).await {
         Ok(manager) => manager,
         Err(e) => {
@@ -231,7 +265,7 @@ async fn main() {
         db_pool: Some(db_pool),
     };
 
-    let app = build_app(state);
+    let app = build_app(state, &config);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     tracing::info!("{} - listening on http://{}", VERSION, addr);
@@ -276,16 +310,29 @@ mod tests {
     use super::*;
     use axum::{
         body::{to_bytes, Body},
-        http::{Request, StatusCode},
+        http::{HeaderValue, Request, StatusCode},
     };
     use serde_json::Value;
     use tower::util::ServiceExt;
+
+    fn test_master_key() -> &'static str {
+        "dev-master-key"
+    }
+
+    fn test_config() -> AppConfig {
+        AppConfig {
+            app_env: AppEnv::Development,
+            master_key: test_master_key().to_string(),
+            storage_path: "./storage".to_string(),
+            cors_allowed_origins: Vec::<HeaderValue>::new(),
+        }
+    }
 
     fn test_state() -> AppState {
         AppState {
             lock_manager: LockManager::new(),
             storage_manager: StorageManager::new("./storage"),
-            auth_manager: AuthManager::with_dev_key(DEV_MASTER_KEY),
+            auth_manager: AuthManager::with_dev_key(test_master_key()),
             version_manager: VersionManager::new(),
             event_store: None,
             audit_chain: None,
@@ -300,11 +347,11 @@ mod tests {
 
     #[tokio::test]
     async fn exists_route_returns_json_response() {
-        let app = build_app(test_state());
+        let app = build_app(test_state(), &test_config());
 
         let request = Request::builder()
             .uri("/v2/storage/exists/abcdef")
-            .header("X-API-Key", DEV_MASTER_KEY)
+            .header("X-API-Key", test_master_key())
             .body(Body::empty())
             .expect("request");
 
@@ -320,7 +367,7 @@ mod tests {
 
     #[tokio::test]
     async fn lock_route_rejects_missing_api_key() {
-        let app = build_app(test_state());
+        let app = build_app(test_state(), &test_config());
 
         let request = Request::builder()
             .method("POST")
@@ -336,8 +383,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn lock_route_rejects_spoofed_owner_id() {
+        let app = build_app(test_state(), &test_config());
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v2/locks/acquire")
+            .header("content-type", "application/json")
+            .header("X-API-Key", test_master_key())
+            .body(Body::from(
+                r#"{"file_path":"assets/a.txt","owner_id":"spoofed-user"}"#,
+            ))
+            .expect("request");
+
+        let response = app.oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn lock_route_uses_authenticated_owner_when_owner_not_provided() {
+        let app = build_app(test_state(), &test_config());
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v2/locks/acquire")
+            .header("content-type", "application/json")
+            .header("X-API-Key", test_master_key())
+            .body(Body::from(r#"{"file_path":"assets/no-owner.txt"}"#))
+            .expect("request");
+
+        let response = app.oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(
+            payload["data"]["owner_id"],
+            Value::String("dev-admin".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn non_upload_routes_reject_oversized_request_body() {
+        let app = build_app(test_state(), &test_config());
+        let oversized_data = "A".repeat(DEFAULT_BODY_LIMIT_BYTES + 1024);
+        let payload = format!(r#"{{"data":"{oversized_data}"}}"#);
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v2/storage/hash")
+            .header("content-type", "application/json")
+            .header("X-API-Key", test_master_key())
+            .body(Body::from(payload))
+            .expect("request");
+
+        let response = app.oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn upload_routes_allow_request_body_larger_than_default_limit() {
+        let app = build_app(test_state(), &test_config());
+        let body = vec![b'x'; DEFAULT_BODY_LIMIT_BYTES + 1024];
+
+        let request = Request::builder()
+            .method("PUT")
+            .uri("/v2/blobs/chunks/not-a-valid-hash")
+            .header("X-API-Key", test_master_key())
+            .body(Body::from(body))
+            .expect("request");
+
+        let response = app.oneshot(request).await.expect("response");
+        assert_ne!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
     async fn ready_returns_503_without_db_pool() {
-        let app = build_app(test_state());
+        let app = build_app(test_state(), &test_config());
 
         let request = Request::builder()
             .uri("/health/ready")
@@ -350,12 +474,12 @@ mod tests {
 
     #[tokio::test]
     async fn replay_verify_returns_503_when_service_unavailable() {
-        let app = build_app(test_state());
+        let app = build_app(test_state(), &test_config());
 
         let request = Request::builder()
             .method("POST")
             .uri("/v2/trust/replay/verify")
-            .header("X-API-Key", DEV_MASTER_KEY)
+            .header("X-API-Key", test_master_key())
             .body(Body::empty())
             .expect("request");
 
@@ -365,7 +489,7 @@ mod tests {
 
     #[tokio::test]
     async fn replay_verify_rejects_missing_api_key() {
-        let app = build_app(test_state());
+        let app = build_app(test_state(), &test_config());
 
         let request = Request::builder()
             .method("POST")
@@ -379,11 +503,11 @@ mod tests {
 
     #[tokio::test]
     async fn replay_readiness_returns_503_when_service_unavailable() {
-        let app = build_app(test_state());
+        let app = build_app(test_state(), &test_config());
 
         let request = Request::builder()
             .uri("/v2/trust/replay/readiness")
-            .header("X-API-Key", DEV_MASTER_KEY)
+            .header("X-API-Key", test_master_key())
             .body(Body::empty())
             .expect("request");
 
@@ -393,7 +517,7 @@ mod tests {
 
     #[tokio::test]
     async fn replay_readiness_rejects_missing_api_key() {
-        let app = build_app(test_state());
+        let app = build_app(test_state(), &test_config());
 
         let request = Request::builder()
             .uri("/v2/trust/replay/readiness")
@@ -406,7 +530,7 @@ mod tests {
 
     #[tokio::test]
     async fn changeset_gate_rejects_missing_api_key() {
-        let app = build_app(test_state());
+        let app = build_app(test_state(), &test_config());
 
         let request = Request::builder()
             .uri("/v2/changesets/test-id/gate?repo_id=repo-a")
@@ -419,11 +543,11 @@ mod tests {
 
     #[tokio::test]
     async fn changeset_gate_returns_not_found_for_unknown_repo() {
-        let app = build_app(test_state());
+        let app = build_app(test_state(), &test_config());
 
         let request = Request::builder()
             .uri("/v2/changesets/test-id/gate?repo_id=repo-a")
-            .header("X-API-Key", DEV_MASTER_KEY)
+            .header("X-API-Key", test_master_key())
             .body(Body::empty())
             .expect("request");
 
@@ -433,7 +557,7 @@ mod tests {
 
     #[tokio::test]
     async fn audit_export_rejects_missing_api_key() {
-        let app = build_app(test_state());
+        let app = build_app(test_state(), &test_config());
 
         let request = Request::builder()
             .uri("/v2/trust/audit/export")
@@ -446,11 +570,11 @@ mod tests {
 
     #[tokio::test]
     async fn audit_export_returns_503_when_service_unavailable() {
-        let app = build_app(test_state());
+        let app = build_app(test_state(), &test_config());
 
         let request = Request::builder()
             .uri("/v2/trust/audit/export")
-            .header("X-API-Key", DEV_MASTER_KEY)
+            .header("X-API-Key", test_master_key())
             .body(Body::empty())
             .expect("request");
 
@@ -460,7 +584,7 @@ mod tests {
 
     #[tokio::test]
     async fn retention_policy_rejects_missing_api_key() {
-        let app = build_app(test_state());
+        let app = build_app(test_state(), &test_config());
 
         let request = Request::builder()
             .uri("/v2/trust/retention/policy")
@@ -473,11 +597,11 @@ mod tests {
 
     #[tokio::test]
     async fn retention_policy_returns_ok_with_admin_key() {
-        let app = build_app(test_state());
+        let app = build_app(test_state(), &test_config());
 
         let request = Request::builder()
             .uri("/v2/trust/retention/policy")
-            .header("X-API-Key", DEV_MASTER_KEY)
+            .header("X-API-Key", test_master_key())
             .body(Body::empty())
             .expect("request");
 
@@ -487,7 +611,7 @@ mod tests {
 
     #[tokio::test]
     async fn witness_topology_rejects_missing_api_key() {
-        let app = build_app(test_state());
+        let app = build_app(test_state(), &test_config());
 
         let request = Request::builder()
             .uri("/v2/trust/witness/topology")
@@ -500,11 +624,11 @@ mod tests {
 
     #[tokio::test]
     async fn witness_topology_returns_503_when_service_unavailable() {
-        let app = build_app(test_state());
+        let app = build_app(test_state(), &test_config());
 
         let request = Request::builder()
             .uri("/v2/trust/witness/topology")
-            .header("X-API-Key", DEV_MASTER_KEY)
+            .header("X-API-Key", test_master_key())
             .body(Body::empty())
             .expect("request");
 

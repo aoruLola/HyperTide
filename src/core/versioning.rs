@@ -508,13 +508,12 @@ impl VersionManager {
             .ok_or_else(|| VersioningError::RepoNotFound {
                 repo_id: repo_id.to_string(),
             })?;
-        let record = repo
-            .changesets
-            .get(changeset_id)
-            .ok_or_else(|| VersioningError::ChangesetNotFound {
+        let record = repo.changesets.get(changeset_id).ok_or_else(|| {
+            VersioningError::ChangesetNotFound {
                 repo_id: repo_id.to_string(),
                 changeset_id: changeset_id.to_string(),
-            })?;
+            }
+        })?;
         let branch_state =
             repo.branches
                 .get(&record.branch)

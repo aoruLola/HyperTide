@@ -45,7 +45,9 @@ pub async fn generate_checkpoint(
         Ok(checkpoint) => (StatusCode::CREATED, Json(ApiResponse::ok(checkpoint))),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::err(format!("failed to generate checkpoint: {error}"))),
+            Json(ApiResponse::err(format!(
+                "failed to generate checkpoint: {error}"
+            ))),
         ),
     }
 }
@@ -74,7 +76,9 @@ pub async fn latest_checkpoint(
         ),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::err(format!("failed to load checkpoint: {error}"))),
+            Json(ApiResponse::err(format!(
+                "failed to load checkpoint: {error}"
+            ))),
         ),
     }
 }
@@ -163,7 +167,9 @@ pub async fn verify_audit_chain(
         Ok(result) => (StatusCode::OK, Json(ApiResponse::ok(result))),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::err(format!("failed to verify audit chain: {error}"))),
+            Json(ApiResponse::err(format!(
+                "failed to verify audit chain: {error}"
+            ))),
         ),
     }
 }
@@ -187,7 +193,9 @@ pub async fn verify_replay(
         Ok(result) => (StatusCode::OK, Json(ApiResponse::ok(result))),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::err(format!("failed to verify replay: {error}"))),
+            Json(ApiResponse::err(format!(
+                "failed to verify replay: {error}"
+            ))),
         ),
     }
 }
@@ -246,7 +254,9 @@ pub async fn export_audit_entries(
         Ok(entries) => (StatusCode::OK, Json(ApiResponse::ok(entries))),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::err(format!("failed to export audit entries: {error}"))),
+            Json(ApiResponse::err(format!(
+                "failed to export audit entries: {error}"
+            ))),
         ),
     }
 }
@@ -259,7 +269,10 @@ pub async fn retention_policy(
         return (status, Json(ApiResponse::err(message)));
     }
 
-    (StatusCode::OK, Json(ApiResponse::ok(state.retention_policy.clone())))
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(state.retention_policy.clone())),
+    )
 }
 
 pub async fn witness_topology(

@@ -6,8 +6,8 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use serde_json::json;
+use serde_json::Value;
 
 use crate::api::{common::ApiResponse, middleware::authz};
 use crate::core::{auth::Permission, storage::StorageManager};
@@ -253,10 +253,11 @@ pub async fn create_manifest(
                 }
             }
             CreateManifestResponse {
-            manifest_hash,
-            merkle_root,
-            chunk_count: canonical.chunks.len(),
-            created,
-        }})),
+                manifest_hash,
+                merkle_root,
+                chunk_count: canonical.chunks.len(),
+                created,
+            }
+        })),
     )
 }

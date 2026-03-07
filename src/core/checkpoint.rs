@@ -40,12 +40,11 @@ impl CheckpointService {
             .fetch_one(&self.pool)
             .await?;
 
-        let locks_count = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM locks WHERE force_released = FALSE",
-        )
-        .fetch_one(&self.pool)
-        .await
-        .unwrap_or(0);
+        let locks_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM locks WHERE force_released = FALSE")
+                .fetch_one(&self.pool)
+                .await
+                .unwrap_or(0);
         let changesets_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM changesets")
             .fetch_one(&self.pool)
             .await

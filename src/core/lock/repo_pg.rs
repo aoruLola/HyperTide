@@ -66,6 +66,52 @@ impl LockRepoPg {
         Ok(())
     }
 
+    pub async fn acquire_lock_atomic(&self, lock: &FileLock) -> Result<FileLock, sqlx::Error> {
+        let row = sqlx::query_as::<_, LockRow>(
+            r#"
+            WITH attempted AS (
+                INSERT INTO locks (file_path, owner_id, locked_at, lease_expires_at, force_released)
+                VALUES ($1, $2, $3, $4, FALSE)
+                ON CONFLICT (file_path)
+                DO UPDATE SET
+                    owner_id = EXCLUDED.owner_id,
+                    locked_at = EXCLUDED.locked_at,
+                    lease_expires_at = EXCLUDED.lease_expires_at,
+                    force_released = FALSE
+                WHERE locks.owner_id = EXCLUDED.owner_id
+                    OR locks.lease_expires_at IS NULL
+                    OR locks.lease_expires_at <= NOW()
+                RETURNING file_path, owner_id, locked_at, lease_expires_at
+            ),
+            current_lock AS (
+                SELECT file_path, owner_id, locked_at, lease_expires_at
+                FROM locks
+                WHERE file_path = $1 AND force_released = FALSE
+            )
+            SELECT file_path, owner_id, locked_at, lease_expires_at
+            FROM attempted
+            UNION ALL
+            SELECT file_path, owner_id, locked_at, lease_expires_at
+            FROM current_lock
+            WHERE NOT EXISTS (SELECT 1 FROM attempted)
+            LIMIT 1
+            "#,
+        )
+        .bind(&lock.file_path)
+        .bind(&lock.owner_id)
+        .bind(lock.locked_at)
+        .bind(lock.lease_expires_at)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(FileLock {
+            file_path: row.file_path,
+            owner_id: row.owner_id,
+            locked_at: row.locked_at,
+            lease_expires_at: row.lease_expires_at,
+        })
+    }
+
     pub async fn delete_lock(&self, file_path: &str) -> Result<(), sqlx::Error> {
         sqlx::query(
             r#"

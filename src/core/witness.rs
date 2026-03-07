@@ -106,8 +106,7 @@ impl WitnessService {
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(2)
             .clamp(1, witnesses.len());
-        let scope =
-            std::env::var("WITNESS_SCOPE").unwrap_or_else(|_| "single-env".to_string());
+        let scope = std::env::var("WITNESS_SCOPE").unwrap_or_else(|_| "single-env".to_string());
 
         Self {
             pool,

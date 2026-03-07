@@ -72,9 +72,7 @@ impl HighRiskGuard {
             "{}|{}|{}|{}|{}|{}",
             self.secret, action, actor_id, nonce, timestamp, payload_hash
         );
-        let expected = blake3::hash(material.as_bytes())
-        .to_hex()
-        .to_string();
+        let expected = blake3::hash(material.as_bytes()).to_hex().to_string();
 
         if expected != signature {
             return Err("invalid signature".to_string());
