@@ -1,24 +1,29 @@
-# HyperTide Backend Compose Deployment
+# HyperTide Deployment
 
-## Quick Start
+Deployment is now split by deliverable:
 
-1. Optional: copy env template
-   - `cp deploy/.env.example deploy/.env`
-2. Start stack
-   - `docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build`
-   - If you did not create `deploy/.env`, use `deploy/.env.example` as `--env-file`.
-3. Run smoke check
-   - `pwsh ./deploy/smoke.ps1`
+- [server](./server/README.md): backend container deployment
+- [cli](./cli/README.md): `ht` packaging for internal distribution
 
-## What This Starts
+## Recommended entrypoints
 
-- `postgres` (PostgreSQL 15)
-- `jwt-keys` one-shot key generator (writes `deploy/keys/jwt-*.pem`)
-- `hypertide` backend service (port `3000`)
+### Server
 
-## Notes
+```powershell
+docker compose -f deploy/server/docker-compose.yml --env-file deploy/server/.env.example up -d --build
+powershell -ExecutionPolicy Bypass -File .\deploy\server\smoke.ps1
+```
 
-- `JWT_*_PATH` in container points to `/keys/jwt-private.pem` and `/keys/jwt-public.pem`.
-- Storage persists to `../storage` from compose file location.
-- `deploy/smoke.ps1` now validates not only health/auth, but also a minimal CLI workflow: `login -> branch create -> add --file -> submit -> sync -> checkout`.
-- For production, replace default passwords, pepper, and generated JWT keys.
+### CLI
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\deploy\cli\package.ps1
+```
+
+```bash
+bash ./deploy/cli/package.sh
+```
+
+## Compatibility note
+
+The repository still contains the older top-level `deploy/Dockerfile`, `deploy/docker-compose.yml`, and `deploy/smoke.ps1` assets for continuity, but new deployments should prefer the split `server/` and `cli/` entrypoints.
