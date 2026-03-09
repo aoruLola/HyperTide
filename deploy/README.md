@@ -4,6 +4,7 @@ Deployment is now split by deliverable:
 
 - [server](./server/README.md): backend container deployment
 - [cli](./cli/README.md): `ht` packaging for internal distribution
+- [ubuntu-server-windows-cli](./ubuntu-server-windows-cli.md): Ubuntu server plus local Windows CLI walkthrough
 
 ## Recommended entrypoints
 
