@@ -1,0 +1,4 @@
+interface:
+  display_name: "HyperTide Trust Audit"
+  short_description: "Handle HyperTide gate, promote, witness, and audit workflows safely"
+  default_prompt: "Use $hypertide-trust-audit to inspect or operate HyperTide gate, promote, witness, audit, retention, or replay workflows with strict confirmation."

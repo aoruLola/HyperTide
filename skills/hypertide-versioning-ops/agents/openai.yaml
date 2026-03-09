@@ -1,0 +1,4 @@
+interface:
+  display_name: "HyperTide Versioning Ops"
+  short_description: "Drive HyperTide staging, branch, submit, and rollback flows safely"
+  default_prompt: "Use $hypertide-versioning-ops to run a HyperTide branch, staging, submit, or rollback workflow with explicit preflight checks."
