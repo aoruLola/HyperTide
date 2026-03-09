@@ -330,12 +330,12 @@ paths:
         '200': { description: Witness summary }
   /v2/trust/witness/topology:
     get:
-      summary: Get witness topology configuration
+      summary: Get witness topology configuration with environment groups
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
       responses:
-        '200': { description: Witness topology }
+        '200': { description: Witness topology including cross-environment quorum metadata }
   /v2/trust/audit/verify:
     post:
       summary: Verify audit hash-chain integrity

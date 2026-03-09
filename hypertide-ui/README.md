@@ -87,14 +87,14 @@ npm install
 
 ```bash
 cd ../
-cargo run --bin hypertide
+cargo run -p hypertide-server --bin hypertide
 ```
 
 后端将在 `http://localhost:3000` 启动。
 
 ### 后端命名约定
 
-- Rust package: `hypertide-cli`
+- Rust workspace packages: `hypertide-server` and `hypertide-cli`
 - Server binary: `hypertide`
 - CLI binary: `ht`
 

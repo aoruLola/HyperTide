@@ -24,6 +24,7 @@
 4. Blob/Manifest endpoints:
 - `POST /v2/blobs/missing`
 - `PUT /v2/blobs/chunks/{chunk_hash}`
+- `POST /v2/blobs/compose`
 - `POST /v2/manifests`
 5. ChangeSet endpoints:
 - `POST /v2/changesets`
@@ -90,6 +91,6 @@
 3. Use readiness gate to block partial initialization serving traffic.
 
 ## Assumptions
-1. Backend package remains `hypertide-cli`; binaries remain `hypertide` and `ht`.
+1. Workspace packages are `hypertide-server` and `hypertide-cli`; binaries remain `hypertide` and `ht`.
 2. Frontend remains out of implementation scope.
 3. API compatibility for `/api` and `/v1` is not guaranteed under v2-only policy.

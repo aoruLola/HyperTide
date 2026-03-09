@@ -72,8 +72,8 @@ impl WitnessService {
         });
         let default_scope =
             std::env::var("WITNESS_DEFAULT_SCOPE").unwrap_or_else(|_| "local".to_string());
-        let default_environment = std::env::var("WITNESS_DEFAULT_ENVIRONMENT")
-            .unwrap_or_else(|_| "local".to_string());
+        let default_environment =
+            std::env::var("WITNESS_DEFAULT_ENVIRONMENT").unwrap_or_else(|_| "local".to_string());
         let mut witnesses = configured
             .split(',')
             .filter_map(|item| {
@@ -244,10 +244,9 @@ impl WitnessService {
     }
 
     pub fn topology(&self) -> WitnessTopology {
-        let mut environments = self
-            .witnesses
-            .iter()
-            .fold(Vec::<WitnessEnvironmentEntry>::new(), |mut entries, witness| {
+        let mut environments = self.witnesses.iter().fold(
+            Vec::<WitnessEnvironmentEntry>::new(),
+            |mut entries, witness| {
                 if let Some(entry) = entries
                     .iter_mut()
                     .find(|entry| entry.environment == witness.environment)
@@ -264,7 +263,8 @@ impl WitnessService {
                     });
                 }
                 entries
-            });
+            },
+        );
         environments.sort_by(|left, right| left.environment.cmp(&right.environment));
         for entry in &mut environments {
             entry.witness_ids.sort();

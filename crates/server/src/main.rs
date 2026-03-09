@@ -23,7 +23,7 @@ use crate::api::auth::{
 };
 use crate::api::blobs::{missing_chunks, upload_chunk};
 use crate::api::lock::{force_unlock_file, list_locks, lock_file, renew_lock_file, unlock_file};
-use crate::api::manifests::create_manifest;
+use crate::api::manifests::{compose_blob, create_manifest};
 use crate::api::storage::{calculate_hash, check_exists, download_file, upload_file};
 use crate::api::trust::{
     attest_checkpoint, export_audit_entries, generate_checkpoint, latest_checkpoint,
@@ -132,6 +132,7 @@ fn build_app(state: AppState, config: &AppConfig) -> Router {
         .route("/v2/storage/exists/:hash", get(check_exists))
         .route("/v2/storage/hash", post(calculate_hash))
         .route("/v2/blobs/missing", post(missing_chunks))
+        .route("/v2/blobs/compose", post(compose_blob))
         .route("/v2/manifests", post(create_manifest))
         .route("/v2/auth/verify", get(verify_key))
         .route("/v2/auth/generate", post(generate_key))
@@ -312,9 +313,11 @@ mod tests {
         body::{to_bytes, Body},
         http::{HeaderValue, Request, StatusCode},
     };
-    use sqlx::postgres::PgPoolOptions;
     use serde_json::Value;
+    use sqlx::postgres::PgPoolOptions;
+    use std::path::PathBuf;
     use std::sync::{Mutex, MutexGuard, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
     use tower::util::ServiceExt;
 
     fn test_master_key() -> &'static str {
@@ -344,6 +347,22 @@ mod tests {
             replay_service: None,
             retention_policy: RetentionPolicy::from_env(),
             db_pool: None,
+        }
+    }
+
+    async fn test_state_with_temp_storage() -> AppState {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let storage_root: PathBuf = std::env::temp_dir()
+            .join("hypertide-server-tests")
+            .join(unique.to_string());
+        let storage_manager = StorageManager::new(&storage_root);
+        storage_manager.init().await.expect("storage init");
+        AppState {
+            storage_manager,
+            ..test_state()
         }
     }
 
@@ -498,6 +517,105 @@ mod tests {
 
         let response = app.oneshot(request).await.expect("response");
         assert_ne!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn compose_blob_reassembles_uploaded_chunks() {
+        let app = build_app(test_state_with_temp_storage().await, &test_config());
+        let chunk_one = b"hello ".to_vec();
+        let chunk_two = b"world".to_vec();
+        let chunk_one_hash = StorageManager::calculate_hash(&chunk_one);
+        let chunk_two_hash = StorageManager::calculate_hash(&chunk_two);
+
+        for (hash, body) in [
+            (&chunk_one_hash, chunk_one.clone()),
+            (&chunk_two_hash, chunk_two.clone()),
+        ] {
+            let request = Request::builder()
+                .method("PUT")
+                .uri(format!("/v2/blobs/chunks/{hash}"))
+                .header("X-API-Key", test_master_key())
+                .body(Body::from(body))
+                .expect("request");
+
+            let response = app.clone().oneshot(request).await.expect("response");
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let manifest_payload = serde_json::json!({
+            "version": 1,
+            "chunk_size_policy": "fixed-4m",
+            "chunks": [
+                { "i": 0, "chunk_hash": chunk_one_hash, "size": 6 },
+                { "i": 1, "chunk_hash": chunk_two_hash, "size": 5 }
+            ],
+            "file_meta": { "name": "hello.txt" }
+        });
+        let manifest_request = Request::builder()
+            .method("POST")
+            .uri("/v2/manifests")
+            .header("X-API-Key", test_master_key())
+            .header("content-type", "application/json")
+            .body(Body::from(manifest_payload.to_string()))
+            .expect("request");
+
+        let manifest_response = app
+            .clone()
+            .oneshot(manifest_request)
+            .await
+            .expect("response");
+        assert_eq!(manifest_response.status(), StatusCode::CREATED);
+        let manifest_body = to_bytes(manifest_response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let manifest_json: Value = serde_json::from_slice(&manifest_body).expect("json");
+        let manifest_hash = manifest_json["data"]["manifest_hash"]
+            .as_str()
+            .expect("manifest hash")
+            .to_string();
+
+        let compose_payload = serde_json::json!({ "manifest_hash": manifest_hash });
+        let compose_request = Request::builder()
+            .method("POST")
+            .uri("/v2/blobs/compose")
+            .header("X-API-Key", test_master_key())
+            .header("content-type", "application/json")
+            .body(Body::from(compose_payload.to_string()))
+            .expect("request");
+
+        let compose_response = app
+            .clone()
+            .oneshot(compose_request)
+            .await
+            .expect("response");
+        assert_eq!(compose_response.status(), StatusCode::OK);
+        let compose_body = to_bytes(compose_response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let compose_json: Value = serde_json::from_slice(&compose_body).expect("json");
+        let blob_hash = compose_json["data"]["blob_hash"]
+            .as_str()
+            .expect("blob hash");
+        assert_eq!(
+            blob_hash,
+            StorageManager::calculate_hash(b"hello world"),
+            "compose should produce the canonical blob hash"
+        );
+
+        let download_request = Request::builder()
+            .uri(format!("/v2/storage/download/{blob_hash}"))
+            .header("X-API-Key", test_master_key())
+            .body(Body::empty())
+            .expect("request");
+        let download_response = app
+            .oneshot(download_request)
+            .await
+            .expect("download response");
+        assert_eq!(download_response.status(), StatusCode::OK);
+        let download_body = to_bytes(download_response.into_body(), usize::MAX)
+            .await
+            .expect("download body");
+        assert_eq!(download_body.as_ref(), b"hello world");
     }
 
     #[tokio::test]
@@ -704,7 +822,10 @@ mod tests {
             .await
             .expect("body");
         let payload: Value = serde_json::from_slice(&body).expect("json");
-        assert_eq!(payload["data"]["scope"], Value::String("cross-env".to_string()));
+        assert_eq!(
+            payload["data"]["scope"],
+            Value::String("cross-env".to_string())
+        );
         assert_eq!(
             payload["data"]["cross_environment"],
             Value::Bool(true),

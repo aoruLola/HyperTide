@@ -20,4 +20,5 @@
 
 - `JWT_*_PATH` in container points to `/keys/jwt-private.pem` and `/keys/jwt-public.pem`.
 - Storage persists to `../storage` from compose file location.
+- `deploy/smoke.ps1` now validates not only health/auth, but also a minimal CLI workflow: `login -> branch create -> add --file -> submit -> sync -> checkout`.
 - For production, replace default passwords, pepper, and generated JWT keys.

@@ -19,6 +19,8 @@ jobs:
         rustup component add rustfmt clippy
         cargo fmt --all
         cargo clippy --workspace --all-targets
+        cargo check --locked -p hypertide-server --bin hypertide
+        cargo check --locked -p hypertide-cli --bin ht
         cargo test --workspace --all-targets
         cargo build --workspace --release
     useTTY: true

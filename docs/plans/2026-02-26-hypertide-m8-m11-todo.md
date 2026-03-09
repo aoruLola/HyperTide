@@ -16,8 +16,8 @@
 | M8-008 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m8-production-baseline | done | codex | P0 | 2026-03-12 | M8-006 |
 | M8-009 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m8-production-baseline | done | codex | P0 | 2026-03-13 | M8-006 |
 | M8-010 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m8-production-baseline | done | codex | P1 | 2026-03-14 | M8-005,M8-008 |
-| M8-011 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m8-production-baseline | in_progress | codex | P1 | 2026-03-15 | docker daemon unavailable for runtime smoke |
-| M8-012 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#validation-matrix | in_progress | codex | P1 | 2026-03-16 | waiting for runtime smoke with docker daemon |
+| M8-011 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m8-production-baseline | done | codex | P1 | 2026-03-15 | runtime smoke passed on 2026-03-09 via fresh compose project |
+| M8-012 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#validation-matrix | done | codex | P1 | 2026-03-16 | closed on 2026-03-09 with categorized rerun + dual compose smoke evidence |
 | M9-001 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m9-git--p4-core-mechanics | done | codex | P0 | 2026-03-20 | none |
 | M9-002 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m9-git--p4-core-mechanics | done | codex | P0 | 2026-03-20 | none |
 | M9-003 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m9-git--p4-core-mechanics | done | codex | P0 | 2026-03-21 | none |
@@ -39,8 +39,10 @@
 | M11-001 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | done | codex | P0 | 2026-04-08 | none |
 | M11-002 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | done | codex | P0 | 2026-04-08 | none |
 | M11-003 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | done | codex | P0 | 2026-04-10 | none |
-| M11-004 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | todo | codex | P1 | 2026-04-12 | M9 close |
-| M11-005 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | todo | codex | P1 | 2026-04-12 | M11-004 |
+| M11-004 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | done | codex | P1 | 2026-04-12 | none |
+| M11-005 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | done | codex | P1 | 2026-04-12 | none |
 | M11-006 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | done | codex | P1 | 2026-04-13 | none |
 | M11-007 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | done | codex | P1 | 2026-04-14 | none |
 | M11-008 | 2026-02-26-hypertide-m8-m11-production-roadmap.md#m11-completion-and-scale | done | codex | P1 | 2026-04-15 | none |
+
+

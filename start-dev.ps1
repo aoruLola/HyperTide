@@ -5,7 +5,7 @@ Write-Host ""
 
 # 启动后端服务
 Write-Host "📦 启动后端服务 (Rust)..." -ForegroundColor Yellow
-Start-Process pwsh -ArgumentList "-NoExit", "-Command", "cargo run --bin hypertide" -WorkingDirectory $PSScriptRoot
+Start-Process pwsh -ArgumentList "-NoExit", "-Command", "cargo run -p hypertide-server --bin hypertide" -WorkingDirectory $PSScriptRoot
 
 # 等待后端启动
 Write-Host "⏳ 等待后端服务启动..." -ForegroundColor Yellow

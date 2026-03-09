@@ -3,10 +3,10 @@ FROM rust:1.86-bookworm AS builder
 WORKDIR /app
 
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
+COPY crates ./crates
 COPY migrations ./migrations
 
-RUN cargo build --release --bin hypertide
+RUN cargo build --release -p hypertide-server --bin hypertide
 
 FROM debian:bookworm-slim
 

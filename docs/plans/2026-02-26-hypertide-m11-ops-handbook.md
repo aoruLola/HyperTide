@@ -1,7 +1,7 @@
-# HyperTide M11 Ops Handbook (Backend)
+﻿# HyperTide M11 Ops Handbook (Backend)
 
 ## Scope
-- Service: `hypertide` backend (`hypertide-cli` package)
+- Service: `hypertide` backend (`hypertide-server` package in the workspace)
 - API surface: `/v2/*`
 - Storage and control plane: Postgres + blob store + trust/audit modules
 
@@ -35,7 +35,7 @@
 - `POST /v2/trust/audit/verify`
 - `POST /v2/trust/replay/verify`
 - `GET /v2/trust/replay/readiness`
-- `GET /v2/trust/witness/topology`
+- `GET /v2/trust/witness/topology` (includes environment groups and cross-environment quorum capability)
 
 3. Compliance:
 - `GET /v2/trust/audit/export`
@@ -56,6 +56,7 @@
 
 4. Witness quorum not met:
 - Check topology and configured witness IDs/quorum.
+- Confirm the topology exposes at least two environments and `cross_environment_quorum_possible = true` before treating cross-environment quorum as healthy.
 - Re-attest latest checkpoint and verify receipt freshness.
 
 ## Rollback Strategy
@@ -72,9 +73,13 @@
 
 ## Change Management
 1. Every milestone batch requires:
-- `cargo check --locked --bin hypertide --bin ht`
+- `cargo check --locked -p hypertide-server --bin hypertide`
+- `cargo check --locked -p hypertide-cli --bin ht`
 - targeted regression tests for changed routes/modules
 
 2. Any API contract change:
 - update `docs/api/openapi.yaml`
 - update `docs/plans/...-todo.md` status
+
+
+Runtime validation reference: `docs/plans/2026-03-09-hypertide-m8-012-validation-matrix.md`
