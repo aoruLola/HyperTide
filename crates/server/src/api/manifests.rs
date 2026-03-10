@@ -217,8 +217,17 @@ pub async fn create_manifest(
     } else {
         let mut missing = Vec::new();
         for hash in chunk_hashes {
-            if !state.storage_manager.exists(&hash).await {
-                missing.push(hash);
+            match state.storage_manager.exists(&hash).await {
+                Ok(true) => {}
+                Ok(false) => missing.push(hash),
+                Err(error) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ApiResponse::err(format!(
+                            "failed to check chunk existence: {error}"
+                        ))),
+                    );
+                }
             }
         }
         missing
@@ -254,7 +263,17 @@ pub async fn create_manifest(
 
     let manifest_hash = StorageManager::calculate_hash(&canonical_json);
     let merkle_root = merkle_root(&canonical.chunks);
-    let mut created = !state.storage_manager.exists(&manifest_hash).await;
+    let mut created = match state.storage_manager.exists(&manifest_hash).await {
+        Ok(exists) => !exists,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::err(format!(
+                    "failed to check manifest existence: {error}"
+                ))),
+            );
+        }
+    };
 
     if let Err(error) = state
         .storage_manager

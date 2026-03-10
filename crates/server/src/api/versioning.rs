@@ -195,8 +195,17 @@ async fn ensure_blob_exists(
 ) -> Result<(), (StatusCode, String)> {
     for asset in assets {
         if let Some(hash) = &asset.blob_hash {
-            if !state.storage_manager.exists(hash).await {
-                return Err((StatusCode::BAD_REQUEST, format!("Blob not found: {hash}")));
+            match state.storage_manager.exists(hash).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err((StatusCode::BAD_REQUEST, format!("Blob not found: {hash}")));
+                }
+                Err(error) => {
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Failed to check blob existence: {error}"),
+                    ));
+                }
             }
         }
     }
