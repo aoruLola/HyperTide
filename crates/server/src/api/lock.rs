@@ -1,7 +1,7 @@
 //! Lock API Handlers
 //! HTTP endpoints for file locking operations
 
-use crate::api::common::ApiResponse;
+use crate::api::common::{map_error, ApiResponse};
 use crate::api::middleware::authz;
 use crate::core::auth::{AuthIdentity, Permission};
 use crate::core::lock::FileLock;
@@ -95,7 +95,10 @@ pub async fn lock_file(
             }
             (StatusCode::OK, Json(ApiResponse::ok(lock)))
         }
-        Err(e) => (StatusCode::CONFLICT, Json(ApiResponse::err(e))),
+        Err(error) => {
+            let (status, response) = map_error(error);
+            (status, Json(response))
+        }
     }
 }
 
@@ -137,7 +140,10 @@ pub async fn unlock_file(
             }
             (StatusCode::OK, Json(ApiResponse::ok(())))
         }
-        Err(e) => (StatusCode::FORBIDDEN, Json(ApiResponse::err(e))),
+        Err(error) => {
+            let (status, response) = map_error(error);
+            (status, Json(response))
+        }
     }
 }
 
@@ -179,7 +185,10 @@ pub async fn renew_lock_file(
             }
             (StatusCode::OK, Json(ApiResponse::ok(lock)))
         }
-        Err(e) => (StatusCode::FORBIDDEN, Json(ApiResponse::err(e))),
+        Err(error) => {
+            let (status, response) = map_error(error);
+            (status, Json(response))
+        }
     }
 }
 
@@ -243,10 +252,10 @@ pub async fn force_unlock_file(
             StatusCode::NOT_FOUND,
             Json(ApiResponse::err("File was not locked")),
         ),
-        Err(message) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::err(message)),
-        ),
+        Err(error) => {
+            let (status, response) = map_error(error);
+            (status, Json(response))
+        }
     }
 }
 

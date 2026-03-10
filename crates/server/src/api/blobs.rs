@@ -146,7 +146,7 @@ pub async fn upload_chunk(
         Err(error) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::err(error)),
+                Json(ApiResponse::err(error.to_string())),
             );
         }
     };

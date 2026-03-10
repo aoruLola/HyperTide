@@ -1,8 +1,11 @@
 //! Common types and utilities shared across API handlers
 
+use axum::http::StatusCode;
 use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
+
+use crate::core::error::HyperTideError;
 
 /// Standard API response wrapper
 #[derive(Debug, Serialize)]
@@ -46,5 +49,63 @@ impl<T> ApiResponse<T> {
                 request_id: Uuid::new_v4().to_string(),
             }),
         }
+    }
+}
+
+pub fn map_error<T>(error: HyperTideError) -> (StatusCode, ApiResponse<T>) {
+    let status = match &error {
+        HyperTideError::Authentication(_) => StatusCode::UNAUTHORIZED,
+        HyperTideError::PermissionDenied(_) => StatusCode::FORBIDDEN,
+        HyperTideError::Conflict(_) => StatusCode::CONFLICT,
+        HyperTideError::NotFound(_) => StatusCode::NOT_FOUND,
+        HyperTideError::Persistence(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        HyperTideError::Configuration(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        HyperTideError::Validation(_) => StatusCode::BAD_REQUEST,
+        HyperTideError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+
+    (
+        status,
+        ApiResponse::err_with_code(error.code(), error.message().to_string()),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_authentication_error() {
+        let (status, response) =
+            map_error::<()>(HyperTideError::Authentication("Invalid API key".into()));
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let error = response.error.expect("error payload");
+        assert_eq!(error.code, "authentication_failed");
+    }
+
+    #[test]
+    fn maps_baseline_conflict_error() {
+        let (status, response) =
+            map_error::<()>(HyperTideError::Conflict("baseline mismatch".into()));
+        assert_eq!(status, StatusCode::CONFLICT);
+        let error = response.error.expect("error payload");
+        assert_eq!(error.code, "conflict");
+    }
+
+    #[test]
+    fn maps_lock_conflict_error() {
+        let (status, response) = map_error::<()>(HyperTideError::Conflict("lock conflict".into()));
+        assert_eq!(status, StatusCode::CONFLICT);
+        let error = response.error.expect("error payload");
+        assert_eq!(error.message, "lock conflict");
+    }
+
+    #[test]
+    fn maps_object_not_found_error() {
+        let (status, response) =
+            map_error::<()>(HyperTideError::NotFound("Object not found".into()));
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let error = response.error.expect("error payload");
+        assert_eq!(error.code, "not_found");
     }
 }
