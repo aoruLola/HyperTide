@@ -28,7 +28,7 @@ pub async fn require_permission_with_options(
             .auth_manager
             .validate_access_token(bearer)
             .await
-            .map_err(|message| (StatusCode::UNAUTHORIZED, message))?
+            .map_err(|message| (StatusCode::UNAUTHORIZED, message.to_string()))?
     } else if allow_api_key {
         let api_key = headers
             .get("X-API-Key")
@@ -41,7 +41,7 @@ pub async fn require_permission_with_options(
             .auth_manager
             .validate_api_key_identity(api_key)
             .await
-            .map_err(|message| (StatusCode::UNAUTHORIZED, message))?
+            .map_err(|message| (StatusCode::UNAUTHORIZED, message.to_string()))?
     } else {
         return Err((StatusCode::UNAUTHORIZED, "Missing bearer token".to_string()));
     };

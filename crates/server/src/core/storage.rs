@@ -2,6 +2,8 @@
 //! Handles file upload/download operations with local and S3 backends
 
 use blake3::Hasher;
+
+use crate::core::error::HyperTideError;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -29,17 +31,17 @@ impl StorageManager {
     }
 
     /// Initialize storage directory structure
-    pub async fn init(&self) -> Result<(), String> {
+    pub async fn init(&self) -> Result<(), HyperTideError> {
         // Create storage directories: objects/, temp/
         let objects_dir = self.storage_root.join("objects");
         let temp_dir = self.storage_root.join("temp");
 
-        fs::create_dir_all(&objects_dir)
-            .await
-            .map_err(|e| format!("Failed to create objects dir: {}", e))?;
-        fs::create_dir_all(&temp_dir)
-            .await
-            .map_err(|e| format!("Failed to create temp dir: {}", e))?;
+        fs::create_dir_all(&objects_dir).await.map_err(|e| {
+            HyperTideError::Persistence(format!("Failed to create objects dir: {}", e))
+        })?;
+        fs::create_dir_all(&temp_dir).await.map_err(|e| {
+            HyperTideError::Persistence(format!("Failed to create temp dir: {}", e))
+        })?;
 
         Ok(())
     }
@@ -53,7 +55,11 @@ impl StorageManager {
 
     /// Store file content, returns the content hash
     /// Uses Content-Addressable Storage (CAS) - files stored by their hash
-    pub async fn store(&self, data: &[u8], original_path: &str) -> Result<StoredFile, String> {
+    pub async fn store(
+        &self,
+        data: &[u8],
+        original_path: &str,
+    ) -> Result<StoredFile, HyperTideError> {
         let hash = Self::calculate_hash(data);
         let size_bytes = data.len() as u64;
 
@@ -73,30 +79,33 @@ impl StorageManager {
         }
 
         // Create subdirectory if needed
-        fs::create_dir_all(&object_dir)
-            .await
-            .map_err(|e| format!("Failed to create object subdir: {}", e))?;
+        fs::create_dir_all(&object_dir).await.map_err(|e| {
+            HyperTideError::Persistence(format!("Failed to create object subdir: {}", e))
+        })?;
 
         // Write file atomically (write to temp, then rename)
         let temp_path = self.storage_root.join("temp").join(&hash);
-        let mut file = fs::File::create(&temp_path)
-            .await
-            .map_err(|e| format!("Failed to create temp file: {}", e))?;
+        let mut file = fs::File::create(&temp_path).await.map_err(|e| {
+            HyperTideError::Persistence(format!("Failed to create temp file: {}", e))
+        })?;
 
         file.write_all(data)
             .await
-            .map_err(|e| format!("Failed to write data: {}", e))?;
+            .map_err(|e| HyperTideError::Persistence(format!("Failed to write data: {}", e)))?;
 
         file.sync_all()
             .await
-            .map_err(|e| format!("Failed to sync file: {}", e))?;
+            .map_err(|e| HyperTideError::Persistence(format!("Failed to sync file: {}", e)))?;
 
         // Atomic rename. If another writer already won the race, treat as idempotent success.
         if let Err(rename_error) = fs::rename(&temp_path, &object_path).await {
             if object_path.exists() {
                 let _ = fs::remove_file(&temp_path).await;
             } else {
-                return Err(format!("Failed to move file to storage: {}", rename_error));
+                return Err(HyperTideError::Persistence(format!(
+                    "Failed to move file to storage: {}",
+                    rename_error
+                )));
             }
         }
 
@@ -109,21 +118,24 @@ impl StorageManager {
     }
 
     /// Retrieve file content by hash
-    pub async fn retrieve(&self, hash: &str) -> Result<Vec<u8>, String> {
+    pub async fn retrieve(&self, hash: &str) -> Result<Vec<u8>, HyperTideError> {
         if hash.len() < 3 {
-            return Err("Invalid hash".to_string());
+            return Err(HyperTideError::Validation("Invalid hash".to_string()));
         }
 
         let (prefix, rest) = hash.split_at(2);
         let object_path = self.storage_root.join("objects").join(prefix).join(rest);
 
         if !object_path.exists() {
-            return Err(format!("Object not found: {}", hash));
+            return Err(HyperTideError::NotFound(format!(
+                "Object not found: {}",
+                hash
+            )));
         }
 
         fs::read(&object_path)
             .await
-            .map_err(|e| format!("Failed to read object: {}", e))
+            .map_err(|e| HyperTideError::Persistence(format!("Failed to read object: {}", e)))
     }
 
     /// Check if a file with given hash exists

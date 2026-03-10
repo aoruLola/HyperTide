@@ -1,4 +1,6 @@
 use chrono::{DateTime, Utc};
+
+use crate::core::error::HyperTideError;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -34,7 +36,7 @@ impl LockManager {
         }
     }
 
-    pub async fn with_pg(pool: PgPool) -> Result<Self, String> {
+    pub async fn with_pg(pool: PgPool) -> Result<Self, HyperTideError> {
         let repo = LockRepoPg::new(pool);
         let manager = Self {
             locks: Arc::new(DashMap::new()),
@@ -42,10 +44,9 @@ impl LockManager {
             lease_seconds: default_lease_seconds(),
         };
 
-        let existing = repo
-            .load_locks()
-            .await
-            .map_err(|e| format!("failed to load locks from db: {e}"))?;
+        let existing = repo.load_locks().await.map_err(|e| {
+            HyperTideError::Persistence(format!("failed to load locks from db: {e}"))
+        })?;
         for lock in existing {
             manager.locks.insert(lock.file_path.clone(), lock);
         }
@@ -54,7 +55,11 @@ impl LockManager {
     }
 
     /// Attempt to lock a file. Returns true if successful, false if already locked by someone else.
-    pub async fn try_lock(&self, file_path: String, owner_id: String) -> Result<FileLock, String> {
+    pub async fn try_lock(
+        &self,
+        file_path: String,
+        owner_id: String,
+    ) -> Result<FileLock, HyperTideError> {
         let requested_lock = FileLock {
             file_path: file_path.clone(),
             owner_id: owner_id.clone(),
@@ -66,14 +71,14 @@ impl LockManager {
             let effective_lock = repo
                 .acquire_lock_atomic(&requested_lock)
                 .await
-                .map_err(|e| format!("failed to persist lock: {e}"))?;
+                .map_err(|e| HyperTideError::Persistence(format!("failed to persist lock: {e}")))?;
             self.locks
                 .insert(effective_lock.file_path.clone(), effective_lock.clone());
             if effective_lock.owner_id != owner_id {
-                return Err(format!(
+                return Err(HyperTideError::Conflict(format!(
                     "File is already locked by {}",
                     effective_lock.owner_id
-                ));
+                )));
             }
             return Ok(effective_lock);
         }
@@ -85,7 +90,10 @@ impl LockManager {
                     occupied.insert(requested_lock.clone());
                     Ok(requested_lock)
                 } else if existing.owner_id != owner_id {
-                    Err(format!("File is already locked by {}", existing.owner_id))
+                    Err(HyperTideError::Conflict(format!(
+                        "File is already locked by {}",
+                        existing.owner_id
+                    )))
                 } else {
                     Ok(existing)
                 }
@@ -97,27 +105,33 @@ impl LockManager {
         }
     }
 
-    pub async fn renew_lock(&self, file_path: &str, owner_id: &str) -> Result<FileLock, String> {
+    pub async fn renew_lock(
+        &self,
+        file_path: &str,
+        owner_id: &str,
+    ) -> Result<FileLock, HyperTideError> {
         let existing = self
             .locks
             .get(file_path)
             .map(|entry| entry.clone())
-            .ok_or_else(|| "File is not locked".to_string())?;
+            .ok_or_else(|| HyperTideError::NotFound("File is not locked".to_string()))?;
 
         if existing.owner_id != owner_id {
-            return Err(format!(
+            return Err(HyperTideError::PermissionDenied(format!(
                 "Cannot renew: File is locked by {}",
                 existing.owner_id
-            ));
+            )));
         }
         if self.is_expired(&existing) {
             if let Some(repo) = &self.repo {
-                repo.delete_lock(file_path)
-                    .await
-                    .map_err(|e| format!("failed to cleanup expired lock: {e}"))?;
+                repo.delete_lock(file_path).await.map_err(|e| {
+                    HyperTideError::Persistence(format!("failed to cleanup expired lock: {e}"))
+                })?;
             }
             self.locks.remove(file_path);
-            return Err("Cannot renew: lock lease expired".to_string());
+            return Err(HyperTideError::Conflict(
+                "Cannot renew: lock lease expired".to_string(),
+            ));
         }
 
         let renewed = FileLock {
@@ -126,32 +140,32 @@ impl LockManager {
         };
 
         if let Some(repo) = &self.repo {
-            repo.upsert_lock(&renewed)
-                .await
-                .map_err(|e| format!("failed to persist lock renew: {e}"))?;
+            repo.upsert_lock(&renewed).await.map_err(|e| {
+                HyperTideError::Persistence(format!("failed to persist lock renew: {e}"))
+            })?;
         }
         self.locks.insert(file_path.to_string(), renewed.clone());
         Ok(renewed)
     }
 
     /// Unlock a file. Only the owner can unlock.
-    pub async fn unlock(&self, file_path: &str, owner_id: &str) -> Result<(), String> {
+    pub async fn unlock(&self, file_path: &str, owner_id: &str) -> Result<(), HyperTideError> {
         // We need to check ownership before removing
         if let Some(existing) = self.locks.get(file_path) {
             if existing.owner_id != owner_id {
-                return Err(format!(
+                return Err(HyperTideError::PermissionDenied(format!(
                     "Cannot unlock: File is locked by {}",
                     existing.owner_id
-                ));
+                )));
             }
         } else {
-            return Err("File is not locked".to_string());
+            return Err(HyperTideError::NotFound("File is not locked".to_string()));
         }
 
         if let Some(repo) = &self.repo {
             repo.delete_lock(file_path)
                 .await
-                .map_err(|e| format!("failed to delete lock: {e}"))?;
+                .map_err(|e| HyperTideError::Persistence(format!("failed to delete lock: {e}")))?;
         }
 
         self.locks.remove(file_path);
@@ -159,11 +173,11 @@ impl LockManager {
     }
 
     /// Admin force unlock
-    pub async fn force_unlock(&self, file_path: &str) -> Result<bool, String> {
+    pub async fn force_unlock(&self, file_path: &str) -> Result<bool, HyperTideError> {
         if let Some(repo) = &self.repo {
-            repo.delete_lock(file_path)
-                .await
-                .map_err(|e| format!("failed to force release lock: {e}"))?;
+            repo.delete_lock(file_path).await.map_err(|e| {
+                HyperTideError::Persistence(format!("failed to force release lock: {e}"))
+            })?;
         }
         Ok(self.locks.remove(file_path).is_some())
     }

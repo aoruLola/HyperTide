@@ -4,7 +4,7 @@ use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::api::common::ApiResponse;
+use crate::api::common::{map_error, ApiResponse};
 use crate::core::auth::{token::TokenPair, AuthManager, Permission};
 use crate::AppState;
 
@@ -221,10 +221,10 @@ pub async fn generate_key(
                 })),
             )
         }
-        Err(message) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::err(message)),
-        ),
+        Err(error) => {
+            let (status, response) = map_error(error);
+            (status, Json(response))
+        }
     }
 }
 
@@ -291,10 +291,10 @@ pub async fn revoke_key(
             StatusCode::NOT_FOUND,
             Json(ApiResponse::err("Key not found")),
         ),
-        Err(message) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::err(message)),
-        ),
+        Err(error) => {
+            let (status, response) = map_error(error);
+            (status, Json(response))
+        }
     }
 }
 
@@ -322,10 +322,10 @@ pub async fn list_keys(
                 .collect::<Vec<_>>();
             (StatusCode::OK, Json(ApiResponse::ok(items)))
         }
-        Err(message) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::err(message)),
-        ),
+        Err(error) => {
+            let (status, response) = map_error(error);
+            (status, Json(response))
+        }
     }
 }
 
@@ -348,7 +348,10 @@ pub async fn exchange_key(
             .await;
             (StatusCode::OK, Json(ApiResponse::ok(tokens)))
         }
-        Err(message) => (StatusCode::UNAUTHORIZED, Json(ApiResponse::err(message))),
+        Err(error) => {
+            let (status, response) = map_error(error);
+            (status, Json(response))
+        }
     }
 }
 
@@ -371,7 +374,10 @@ pub async fn refresh_token(
             .await;
             (StatusCode::OK, Json(ApiResponse::ok(tokens)))
         }
-        Err(message) => (StatusCode::UNAUTHORIZED, Json(ApiResponse::err(message))),
+        Err(error) => {
+            let (status, response) = map_error(error);
+            (status, Json(response))
+        }
     }
 }
 
@@ -400,6 +406,9 @@ pub async fn revoke_refresh_token(
                 Json(ApiResponse::ok(RevokeRefreshResponse { revoked })),
             )
         }
-        Err(message) => (StatusCode::BAD_REQUEST, Json(ApiResponse::err(message))),
+        Err(error) => {
+            let (status, response) = map_error(error);
+            (status, Json(response))
+        }
     }
 }
