@@ -16,3 +16,4 @@ anyhow.workspace = true
 clap.workspace = true
 blake3.workspace = true
 reqwest.workspace = true
+
