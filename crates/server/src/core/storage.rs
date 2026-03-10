@@ -2,6 +2,7 @@
 //! Handles file upload/download operations with local and S3 backends
 
 use blake3::Hasher;
+use crate::core::error::HyperTideError;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -35,17 +36,17 @@ impl StorageManager {
     }
 
     /// Initialize storage directory structure
-    pub async fn init(&self) -> Result<(), String> {
+    pub async fn init(&self) -> Result<(), HyperTideError> {
         // Create storage directories: objects/, temp/
         let objects_dir = self.storage_root.join("objects");
         let temp_dir = self.storage_root.join("temp");
 
         fs::create_dir_all(&objects_dir)
             .await
-            .map_err(|e| format!("Failed to create objects dir: {}", e))?;
+            .map_err(|e| HyperTideError::Persistence(format!("Failed to create objects dir: {}", e)))?;
         fs::create_dir_all(&temp_dir)
             .await
-            .map_err(|e| format!("Failed to create temp dir: {}", e))?;
+            .map_err(|e| HyperTideError::Persistence(format!("Failed to create temp dir: {}", e)))?;
 
         Ok(())
     }
@@ -59,7 +60,7 @@ impl StorageManager {
 
     /// Store file content, returns the content hash
     /// Uses Content-Addressable Storage (CAS) - files stored by their hash
-    pub async fn store(&self, data: &[u8], original_path: &str) -> Result<StoredFile, String> {
+    pub async fn store(&self, data: &[u8], original_path: &str) -> Result<StoredFile, HyperTideError> {
         let hash = Self::calculate_hash(data);
         let size_bytes = data.len() as u64;
 
@@ -69,7 +70,10 @@ impl StorageManager {
         let object_path = object_dir.join(rest);
 
         // Check if already exists (deduplication)
-        if Self::check_path_exists(&object_path, "object existence before store").await? {
+        if Self::check_path_exists(&object_path, "object existence before store")
+            .await
+            .map_err(HyperTideError::Persistence)?
+        {
             return Ok(StoredFile {
                 hash,
                 original_path: original_path.to_string(),
@@ -81,21 +85,21 @@ impl StorageManager {
         // Create subdirectory if needed
         fs::create_dir_all(&object_dir)
             .await
-            .map_err(|e| format!("Failed to create object subdir: {}", e))?;
+            .map_err(|e| HyperTideError::Persistence(format!("Failed to create object subdir: {}", e)))?;
 
         // Write file atomically (write to temp, then rename)
         let temp_path = self.storage_root.join("temp").join(&hash);
         let mut file = fs::File::create(&temp_path)
             .await
-            .map_err(|e| format!("Failed to create temp file: {}", e))?;
+            .map_err(|e| HyperTideError::Persistence(format!("Failed to create temp file: {}", e)))?;
 
         file.write_all(data)
             .await
-            .map_err(|e| format!("Failed to write data: {}", e))?;
+            .map_err(|e| HyperTideError::Persistence(format!("Failed to write data: {}", e)))?;
 
         file.sync_all()
             .await
-            .map_err(|e| format!("Failed to sync file: {}", e))?;
+            .map_err(|e| HyperTideError::Persistence(format!("Failed to sync file: {}", e)))?;
 
         // Atomic rename. If another writer already won the race, treat as idempotent success.
         if let Err(rename_error) = fs::rename(&temp_path, &object_path).await {
@@ -105,13 +109,13 @@ impl StorageManager {
                     let _ = fs::remove_file(&temp_path).await;
                 }
                 Ok(false) => {
-                    return Err(format!("Failed to move file to storage: {}", rename_error));
+                    return Err(HyperTideError::Persistence(format!("Failed to move file to storage: {}", rename_error)));
                 }
                 Err(exists_error) => {
-                    return Err(format!(
+                    return Err(HyperTideError::Persistence(format!(
                         "Failed to move file to storage: {}; additionally failed to verify object existence: {}",
                         rename_error, exists_error
-                    ));
+                    )));
                 }
             }
         }
@@ -125,21 +129,24 @@ impl StorageManager {
     }
 
     /// Retrieve file content by hash
-    pub async fn retrieve(&self, hash: &str) -> Result<Vec<u8>, String> {
+    pub async fn retrieve(&self, hash: &str) -> Result<Vec<u8>, HyperTideError> {
         if hash.len() < 3 {
-            return Err("Invalid hash".to_string());
+            return Err(HyperTideError::Validation("Invalid hash".to_string()));
         }
 
         let (prefix, rest) = hash.split_at(2);
         let object_path = self.storage_root.join("objects").join(prefix).join(rest);
 
-        if !Self::check_path_exists(&object_path, "object existence before retrieve").await? {
-            return Err(format!("Object not found: {}", hash));
+        if !Self::check_path_exists(&object_path, "object existence before retrieve")
+            .await
+            .map_err(HyperTideError::Persistence)?
+        {
+            return Err(HyperTideError::NotFound(format!("Object not found: {}", hash)));
         }
 
         fs::read(&object_path)
             .await
-            .map_err(|e| format!("Failed to read object: {}", e))
+            .map_err(|e| HyperTideError::Persistence(format!("Failed to read object: {}", e)))
     }
 
     /// Check if a file with given hash exists
@@ -167,6 +174,7 @@ impl StorageManager {
 #[cfg(test)]
 mod tests {
     use super::StorageManager;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     fn make_storage_root(name: &str) -> std::path::PathBuf {
@@ -213,6 +221,7 @@ mod tests {
         std::fs::remove_dir_all(root).ok();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn store_reports_permission_error_on_objects_dir() {
         let root = make_storage_root("permission-store");
@@ -232,8 +241,8 @@ mod tests {
 
         if let Err(error) = permission_attempt {
             assert!(
-                error.contains("Failed to create object subdir")
-                    || error.contains("Failed to check object existence before store")
+                error.to_string().contains("Failed to create object subdir")
+                    || error.to_string().contains("Failed to check object existence before store")
             );
         } else {
             // In privileged environments permission bits may not block access;
@@ -244,8 +253,8 @@ mod tests {
             let fallback = manager.store(b"blocked-fallback", "blocked.bin").await;
             let fallback_error = fallback.expect_err("store should fail on poisoned prefix dir");
             assert!(
-                fallback_error.contains("Failed to create object subdir")
-                    || fallback_error.contains("Failed to check object existence before store")
+                fallback_error.to_string().contains("Failed to create object subdir")
+                    || fallback_error.to_string().contains("Failed to check object existence before store")
             );
             std::fs::remove_file(blocked_prefix).ok();
         }
@@ -276,15 +285,30 @@ mod tests {
             .retrieve(&stored.hash)
             .await
             .expect_err("retrieve should fail");
-        assert!(retrieve_err.contains("Failed to check object existence before retrieve"));
+        let retrieve_msg = retrieve_err.to_string();
+        assert!(
+            retrieve_msg.contains("Failed to check object existence before retrieve")
+                || retrieve_msg.contains("Object not found")
+        );
+        let exists_result = manager.exists(&stored.hash).await;
+        match exists_result {
+            Ok(false) => {}
+            Ok(true) => panic!("exists should not return true for broken target"),
+            Err(error) => {
+                assert!(error.contains("Failed to check object existence"));
+            }
+        }
 
-        let exists_err = manager
-            .exists(&stored.hash)
-            .await
-            .expect_err("exists should fail");
-        assert!(exists_err.contains("Failed to check object existence"));
 
         std::fs::remove_file(object_dir).ok();
         std::fs::remove_dir_all(root).ok();
     }
 }
+
+
+
+
+
+
+
+

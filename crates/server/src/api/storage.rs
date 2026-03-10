@@ -11,7 +11,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::api::common::ApiResponse;
+use crate::api::common::{map_error, ApiResponse};
 use crate::api::middleware::authz;
 use crate::core::auth::Permission;
 use crate::core::storage::StorageManager;
@@ -104,7 +104,10 @@ pub async fn upload_file(
                 })),
             )
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::err(e))),
+        Err(error) => {
+            let (status, response) = map_error::<UploadResponse>(error);
+            (status, Json(response))
+        }
     }
 }
 
@@ -130,7 +133,10 @@ pub async fn download_file(
             )
             .body(Body::from(data))
             .unwrap(),
-        Err(e) => (StatusCode::NOT_FOUND, e).into_response(),
+        Err(error) => {
+            let (status, response) = map_error::<()>(error);
+            (status, Json(response)).into_response()
+        }
     }
 }
 

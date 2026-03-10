@@ -5,284 +5,27 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 use blake3::Hasher;
-use clap::{Args, Parser, Subcommand};
 use reqwest::{multipart, RequestBuilder, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 const ROOT_BASE_CHANGESET_ID: &str = "ROOT";
 const DIRECT_UPLOAD_THRESHOLD_BYTES: usize = 8 * 1024 * 1024;
 
-#[derive(Debug, Parser)]
-#[command(name = "ht", version, about = "HyperTide CLI")]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
+mod client;
+mod commands;
+mod models;
+mod workspace;
 
-#[derive(Debug, Subcommand)]
-enum Command {
-    Login(LoginArgs),
-    Branch(BranchArgs),
-    Add(AddArgs),
-    Remove(RemoveArgs),
-    Submit(SubmitArgs),
-    Log(LogArgs),
-    Rollback(RollbackArgs),
-    Sync(SyncArgs),
-    Checkout(CheckoutArgs),
-    Status(StatusArgs),
-    Diff(DiffArgs),
-    ChunkUpload(ChunkUploadArgs),
-}
+use clap::{CommandFactory, Parser};
+use commands::*;
+use models::*;
 
-#[derive(Debug, Args)]
-struct LoginArgs {
-    #[arg(long)]
-    server: String,
-    #[arg(long)]
-    token: String,
-    #[arg(long, default_value_t = false)]
-    api_key_direct: bool,
-    #[arg(long)]
-    repo: Option<String>,
-    #[arg(long, default_value = "main")]
-    branch: String,
-}
-
-#[derive(Debug, Args)]
-struct BranchArgs {
-    #[command(subcommand)]
-    command: BranchCommand,
-}
-
-#[derive(Debug, Subcommand)]
-enum BranchCommand {
-    Create(BranchCreateArgs),
-    List(BranchListArgs),
-    Switch(BranchSwitchArgs),
-}
-
-#[derive(Debug, Args)]
-struct BranchCreateArgs {
-    #[arg(long)]
-    repo: String,
-    #[arg(long)]
-    name: String,
-    #[arg(long)]
-    from: Option<String>,
-}
-
-#[derive(Debug, Args)]
-struct BranchListArgs {
-    #[arg(long)]
-    repo: String,
-}
-
-#[derive(Debug, Args)]
-struct BranchSwitchArgs {
-    #[arg(long)]
-    repo: String,
-    #[arg(long)]
-    name: String,
-}
-
-#[derive(Debug, Args)]
-struct AddArgs {
-    #[arg(long)]
-    path: Option<String>,
-    #[arg(long)]
-    blob: Option<String>,
-    #[arg(long)]
-    file: Option<String>,
-    #[arg(long)]
-    asset_path: Option<String>,
-    #[arg(long)]
-    branch: Option<String>,
-}
-
-#[derive(Debug, Args)]
-struct RemoveArgs {
-    #[arg(long)]
-    asset_path: String,
-    #[arg(long)]
-    branch: Option<String>,
-}
-
-#[derive(Debug, Args)]
-struct SubmitArgs {
-    #[arg(long)]
-    repo: Option<String>,
-    #[arg(long)]
-    branch: Option<String>,
-    #[arg(long, default_value = "submit")]
-    message: String,
-}
-
-#[derive(Debug, Args)]
-struct LogArgs {
-    #[arg(long)]
-    repo: Option<String>,
-    #[arg(long)]
-    branch: Option<String>,
-    #[arg(long, default_value_t = 20)]
-    limit: usize,
-}
-
-#[derive(Debug, Args)]
-struct RollbackArgs {
-    #[arg(long)]
-    repo: Option<String>,
-    #[arg(long)]
-    branch: Option<String>,
-    #[arg(long = "to")]
-    target_changeset_id: String,
-    #[arg(long)]
-    author: Option<String>,
-    #[arg(long)]
-    message: Option<String>,
-}
-
-#[derive(Debug, Args)]
-struct SyncArgs {
-    #[arg(long)]
-    repo: Option<String>,
-    #[arg(long)]
-    branch: Option<String>,
-    #[arg(long = "to")]
-    to_changeset_id: Option<String>,
-}
-
-#[derive(Debug, Args)]
-struct CheckoutArgs {
-    #[arg(long)]
-    repo: Option<String>,
-    #[arg(long)]
-    branch: Option<String>,
-    #[arg(long = "to")]
-    to_changeset_id: Option<String>,
-}
-
-#[derive(Debug, Args)]
-struct StatusArgs {
-    #[arg(long)]
-    repo: Option<String>,
-    #[arg(long)]
-    branch: Option<String>,
-}
-
-#[derive(Debug, Args)]
-struct DiffArgs {
-    #[arg(long)]
-    repo: Option<String>,
-    #[arg(long)]
-    branch: Option<String>,
-}
-
-#[derive(Debug, Args)]
-struct ChunkUploadArgs {
-    #[arg(long)]
-    file: String,
-    #[arg(long, default_value_t = 4 * 1024 * 1024)]
-    chunk_size: usize,
-    #[arg(long, default_value = "fixed-4m")]
-    chunk_size_policy: String,
-    #[arg(long, default_value_t = false)]
-    manifest_only: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CliProfile {
-    server: String,
-    #[serde(alias = "token")]
-    api_key: String,
-    #[serde(default)]
-    api_key_direct: bool,
-    #[serde(default)]
-    access_token: Option<String>,
-    #[serde(default)]
-    refresh_token: Option<String>,
-    #[serde(default)]
-    access_token_expires_at: Option<i64>,
-    current_repo: Option<String>,
-    #[serde(default = "default_branch")]
-    current_branch: String,
-}
-
-fn default_branch() -> String {
-    "main".to_string()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct StageFile {
-    branch: String,
-    base_changeset_id: Option<String>,
-    assets: Vec<AssetDelta>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AssetDelta {
-    path: String,
-    blob_hash: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct WorkspaceFile {
-    path: String,
-    blob_hash: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct WorkspaceState {
-    repo_id: String,
-    branch: String,
-    workspace_root: String,
-    base_changeset_id: Option<String>,
-    checked_out_assets: Vec<WorkspaceFile>,
-    last_synced_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct FileLockInfo {
-    file_path: String,
-    owner_id: String,
-    locked_at: String,
-    lease_expires_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ComposeBlobRequest<'a> {
-    manifest_hash: &'a str,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ComposeBlobResponse {
-    blob_hash: String,
-    size_bytes: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum AssetStatusKind {
-    Unmodified,
-    Modified,
-    Added,
-    Deleted,
-    Staged,
-    LockedByOther,
-    StaleBase,
-}
-
-impl AssetStatusKind {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::Unmodified => "unmodified",
-            Self::Modified => "modified",
-            Self::Added => "added",
-            Self::Deleted => "deleted",
-            Self::Staged => "staged",
-            Self::LockedByOther => "locked_by_other",
-            Self::StaleBase => "stale_base",
-        }
-    }
+fn parse_cli_from<I, T>(iter: I) -> std::result::Result<Cli, clap::Error>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    Cli::try_parse_from(iter)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -299,14 +42,6 @@ struct ApiError {
     #[serde(default)]
     details: Option<serde_json::Value>,
     request_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TokenPair {
-    access_token: String,
-    refresh_token: String,
-    token_type: String,
-    expires_in: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1429,13 +1164,7 @@ async fn upload_blob_via_chunks(
 }
 
 fn with_auth(request: RequestBuilder, profile: &CliProfile) -> RequestBuilder {
-    if profile.api_key_direct {
-        return request.header("X-API-Key", &profile.api_key);
-    }
-    if let Some(access_token) = profile.access_token.as_deref() {
-        return request.bearer_auth(access_token);
-    }
-    request.header("X-API-Key", &profile.api_key)
+    client::with_auth(request, profile)
 }
 
 fn now_unix() -> i64 {
@@ -1446,16 +1175,11 @@ fn now_unix() -> i64 {
 }
 
 fn token_expired(profile: &CliProfile) -> bool {
-    let Some(expires_at) = profile.access_token_expires_at else {
-        return true;
-    };
-    now_unix() >= expires_at - 30
+    client::token_expired(profile, now_unix())
 }
 
 fn apply_token_pair(profile: &mut CliProfile, pair: TokenPair) {
-    profile.access_token = Some(pair.access_token);
-    profile.refresh_token = Some(pair.refresh_token);
-    profile.access_token_expires_at = Some(now_unix() + pair.expires_in.max(0));
+    client::apply_token_pair(profile, pair, now_unix())
 }
 
 async fn exchange_api_key_for_tokens(
@@ -1663,101 +1387,52 @@ fn resolve_repo(profile: &CliProfile, repo: Option<&str>) -> Result<String> {
         .ok_or_else(|| anyhow!("repo not set. pass --repo or run login with --repo"))
 }
 
-impl StageFile {
-    fn default_for_branch(branch: &str) -> Self {
-        Self {
-            branch: branch.to_string(),
-            base_changeset_id: None,
-            assets: Vec::new(),
-        }
-    }
+fn state_paths() -> Result<workspace::StatePaths> {
+    Ok(workspace::state_paths_from(&std::env::current_dir()?))
 }
 
 fn load_profile() -> Result<CliProfile> {
-    let path = profile_path()?;
-    let content =
-        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
-    let profile: CliProfile = serde_json::from_str(&content)?;
-    Ok(profile)
+    let paths = state_paths()?;
+    workspace::load_json(&paths.profile_path)
 }
 
 fn save_profile(profile: &CliProfile) -> Result<()> {
-    ensure_state_dir()?;
-    let path = profile_path()?;
-    fs::write(path, serde_json::to_vec_pretty(profile)?)?;
-    Ok(())
+    let paths = state_paths()?;
+    workspace::ensure_state_dirs(&paths)?;
+    workspace::save_json(&paths.profile_path, profile)
 }
 
 fn load_stage() -> Result<StageFile> {
-    let path = stage_path()?;
-    let content =
-        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
-    let stage: StageFile = serde_json::from_str(&content)?;
-    Ok(stage)
+    let paths = state_paths()?;
+    workspace::load_json(&paths.stage_path)
 }
 
 fn save_stage(stage: &StageFile) -> Result<()> {
-    ensure_state_dir()?;
-    let path = stage_path()?;
-    fs::write(path, serde_json::to_vec_pretty(stage)?)?;
-    Ok(())
+    let paths = state_paths()?;
+    workspace::ensure_state_dirs(&paths)?;
+    workspace::save_json(&paths.stage_path, stage)
 }
 
 fn load_workspace() -> Result<WorkspaceState> {
-    let path = workspace_path()?;
-    let content =
-        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
-    let workspace: WorkspaceState = serde_json::from_str(&content)?;
-    Ok(workspace)
+    let paths = state_paths()?;
+    workspace::load_json(&paths.workspace_path)
 }
 
-fn save_workspace(workspace: &WorkspaceState) -> Result<()> {
-    ensure_state_dir()?;
-    let path = workspace_path()?;
-    fs::write(path, serde_json::to_vec_pretty(workspace)?)?;
-    Ok(())
-}
-
-fn ensure_state_dir() -> Result<()> {
-    let dir = state_dir()?;
-    if !dir.exists() {
-        fs::create_dir_all(&dir)?;
-    }
-    let cache_dir = cache_dir()?;
-    if !cache_dir.exists() {
-        fs::create_dir_all(&cache_dir)?;
-    }
-    Ok(())
-}
-
-fn state_dir() -> Result<PathBuf> {
-    let cwd = std::env::current_dir()?;
-    Ok(cwd.join(".hypertide"))
-}
-
-fn profile_path() -> Result<PathBuf> {
-    Ok(state_dir()?.join("profile.json"))
-}
-
-fn stage_path() -> Result<PathBuf> {
-    Ok(state_dir()?.join("stage.json"))
-}
-
-fn workspace_path() -> Result<PathBuf> {
-    Ok(state_dir()?.join("workspace.json"))
-}
-
-fn cache_dir() -> Result<PathBuf> {
-    Ok(state_dir()?.join("cache").join("objects"))
+fn save_workspace(workspace_state: &WorkspaceState) -> Result<()> {
+    let paths = state_paths()?;
+    workspace::ensure_state_dirs(&paths)?;
+    workspace::save_json(&paths.workspace_path, workspace_state)
 }
 
 fn cache_object_path(hash: &str) -> Result<PathBuf> {
-    Ok(cache_dir()?.join(hash))
+    let paths = state_paths()?;
+    Ok(workspace::cache_object_path(&paths, hash))
 }
 
 fn cache_blob(hash: &str, bytes: &[u8]) -> Result<()> {
-    ensure_state_dir()?;
-    let path = cache_object_path(hash)?;
+    let paths = state_paths()?;
+    workspace::ensure_state_dirs(&paths)?;
+    let path = workspace::cache_object_path(&paths, hash);
     fs::write(&path, bytes)
         .with_context(|| format!("failed to write cached blob {}", path.display()))?;
     Ok(())
@@ -1773,6 +1448,106 @@ mod cli_tests {
     use super::*;
 
     #[test]
+    fn parse_commands_baseline() {
+        let cases = vec![
+            vec!["ht", "login", "--server", "http://x", "--token", "t"],
+            vec!["ht", "branch", "create", "--repo", "r", "--name", "feat"],
+            vec!["ht", "branch", "list", "--repo", "r"],
+            vec!["ht", "branch", "switch", "--repo", "r", "--name", "main"],
+            vec!["ht", "add", "--path", "a", "--blob", "b"],
+            vec!["ht", "remove", "--asset-path", "a"],
+            vec!["ht", "submit"],
+            vec!["ht", "log"],
+            vec!["ht", "rollback", "--to", "c1"],
+            vec!["ht", "sync"],
+            vec!["ht", "checkout"],
+            vec!["ht", "status"],
+            vec!["ht", "diff"],
+            vec!["ht", "chunk-upload", "--file", "f.bin"],
+        ];
+        for case in cases {
+            assert!(parse_cli_from(case).is_ok());
+        }
+    }
+
+    fn command_help(mut cmd: clap::Command) -> String {
+        let mut out = Vec::new();
+        cmd.write_long_help(&mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn help_snapshot_contains_key_fragments() {
+        let root = command_help(Cli::command());
+        for fragment in [
+            "login",
+            "branch",
+            "add",
+            "remove",
+            "submit",
+            "log",
+            "rollback",
+            "sync",
+            "checkout",
+            "status",
+            "diff",
+            "chunk-upload",
+        ] {
+            assert!(root.contains(fragment), "missing fragment: {fragment}");
+        }
+        let login = command_help(Cli::command().find_subcommand("login").unwrap().clone());
+        assert!(login.contains("--branch"));
+        assert!(login.contains("[default: main]"));
+        let log_help = command_help(Cli::command().find_subcommand("log").unwrap().clone());
+        assert!(log_help.contains("--limit"));
+        assert!(log_help.contains("[default: 20]"));
+        let chunk_help = command_help(
+            Cli::command()
+                .find_subcommand("chunk-upload")
+                .unwrap()
+                .clone(),
+        );
+        assert!(chunk_help.contains("--chunk-size-policy"));
+        assert!(chunk_help.contains("[default: fixed-4m]"));
+    }
+
+    #[test]
+    fn hypertide_paths_and_rw_defaults() {
+        let dir = std::env::temp_dir().join(format!("hypertide-cli-test-{}", now_unix()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let paths = workspace::state_paths_from(&dir);
+        workspace::ensure_state_dirs(&paths).unwrap();
+        assert_eq!(paths.profile_path, dir.join(".hypertide/profile.json"));
+        assert_eq!(paths.stage_path, dir.join(".hypertide/stage.json"));
+        assert_eq!(paths.workspace_path, dir.join(".hypertide/workspace.json"));
+        assert_eq!(
+            workspace::cache_object_path(&paths, "abc"),
+            dir.join(".hypertide/cache/objects/abc")
+        );
+
+        let profile = CliProfile {
+            server: "http://x".into(),
+            api_key: "k".into(),
+            api_key_direct: true,
+            access_token: None,
+            refresh_token: None,
+            access_token_expires_at: None,
+            current_repo: Some("r".into()),
+            current_branch: "main".into(),
+        };
+        workspace::save_json(&paths.profile_path, &profile).unwrap();
+        let loaded_profile: CliProfile = workspace::load_json(&paths.profile_path).unwrap();
+        assert_eq!(loaded_profile.current_branch, "main");
+
+        let stage = StageFile::default_for_branch("dev");
+        workspace::save_json(&paths.stage_path, &stage).unwrap();
+        let loaded_stage: StageFile = workspace::load_json(&paths.stage_path).unwrap();
+        assert!(loaded_stage.assets.is_empty());
+        assert_eq!(loaded_stage.base_changeset_id, None);
+    }
+
+    #[test]
     fn classify_status_prefers_staged_and_stale_base_signals() {
         assert_eq!(
             classify_asset_status(Some("base"), Some("local"), Some("next"), None, false),
@@ -1781,22 +1556,6 @@ mod cli_tests {
         assert_eq!(
             classify_asset_status(Some("base"), Some("base"), None, None, true),
             AssetStatusKind::StaleBase
-        );
-    }
-
-    #[test]
-    fn classify_status_covers_modified_added_and_deleted() {
-        assert_eq!(
-            classify_asset_status(Some("base"), Some("other"), None, None, false),
-            AssetStatusKind::Modified
-        );
-        assert_eq!(
-            classify_asset_status(None, Some("new"), None, None, false),
-            AssetStatusKind::Added
-        );
-        assert_eq!(
-            classify_asset_status(Some("base"), None, None, None, false),
-            AssetStatusKind::Deleted
         );
     }
 }

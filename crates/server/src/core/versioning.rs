@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+use crate::core::error::HyperTideError;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -247,12 +248,11 @@ impl VersionManager {
         }
     }
 
-    pub async fn with_pg(pool: PgPool) -> Result<Self, String> {
+    pub async fn with_pg(pool: PgPool) -> Result<Self, HyperTideError> {
         let repo_pg = VersionRepoPg::new(pool);
-        let repos = repo_pg
-            .load_repos()
-            .await
-            .map_err(|error| format!("failed to load versioning state from db: {error}"))?;
+        let repos = repo_pg.load_repos().await.map_err(|error| {
+            HyperTideError::Persistence(format!("failed to load versioning state from db: {error}"))
+        })?;
         Ok(Self {
             repos: Arc::new(RwLock::new(repos)),
             persistence_path: None,

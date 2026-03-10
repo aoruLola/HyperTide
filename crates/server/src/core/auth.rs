@@ -7,6 +7,8 @@ pub mod token;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
+
+use crate::core::error::HyperTideError;
 use chrono::{DateTime, Duration, Utc};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -267,11 +269,14 @@ impl AuthManager {
         }
     }
 
-    pub async fn validate_api_key_identity(&self, key: &str) -> Result<AuthIdentity, String> {
+    pub async fn validate_api_key_identity(
+        &self,
+        key: &str,
+    ) -> Result<AuthIdentity, HyperTideError> {
         let api_key = self
             .validate_key_any(key)
             .await
-            .ok_or_else(|| "Invalid API key".to_string())?;
+            .ok_or_else(|| HyperTideError::Authentication("Invalid API key".to_string()))?;
         Ok(AuthIdentity {
             owner_id: api_key.owner_id,
             permissions: api_key.permissions,
@@ -279,12 +284,13 @@ impl AuthManager {
         })
     }
 
-    pub async fn validate_access_token(&self, token: &str) -> Result<AuthIdentity, String> {
-        let token_service = self
-            .token_service
-            .as_ref()
-            .ok_or_else(|| "JWT service not configured".to_string())?;
-        let claims = token_service.decode_access_token(token)?;
+    pub async fn validate_access_token(&self, token: &str) -> Result<AuthIdentity, HyperTideError> {
+        let token_service = self.token_service.as_ref().ok_or_else(|| {
+            HyperTideError::Configuration("JWT service not configured".to_string())
+        })?;
+        let claims = token_service
+            .decode_access_token(token)
+            .map_err(HyperTideError::Authentication)?;
         let permissions = claims
             .permissions
             .iter()
@@ -303,35 +309,36 @@ impl AuthManager {
         owner_id: &str,
         permissions: Vec<Permission>,
         expires_in_days: Option<i64>,
-    ) -> Result<ApiKey, String> {
+    ) -> Result<ApiKey, HyperTideError> {
         let api_key = self.generate_key(owner_id, permissions.clone(), expires_in_days);
         if let Some(repo) = &self.repo {
             repo.upsert_api_key(&api_key.key, owner_id, &permissions, api_key.expires_at)
                 .await
-                .map_err(|error| format!("failed to persist api key: {error}"))?;
+                .map_err(|error| {
+                    HyperTideError::Persistence(format!("failed to persist api key: {error}"))
+                })?;
         }
         Ok(api_key)
     }
 
-    pub async fn revoke_key_persistent(&self, key: &str) -> Result<bool, String> {
+    pub async fn revoke_key_persistent(&self, key: &str) -> Result<bool, HyperTideError> {
         let in_memory_revoked = self.revoke_key(key);
         let db_revoked = if let Some(repo) = &self.repo {
-            repo.revoke_api_key(key)
-                .await
-                .map_err(|error| format!("failed to revoke api key: {error}"))?
+            repo.revoke_api_key(key).await.map_err(|error| {
+                HyperTideError::Persistence(format!("failed to revoke api key: {error}"))
+            })?
         } else {
             false
         };
         Ok(in_memory_revoked || db_revoked)
     }
 
-    pub async fn list_keys_persistent(&self) -> Result<Vec<ApiKey>, String> {
+    pub async fn list_keys_persistent(&self) -> Result<Vec<ApiKey>, HyperTideError> {
         let mut keys = self.list_keys();
         if let Some(repo) = &self.repo {
-            let stored = repo
-                .list_api_keys()
-                .await
-                .map_err(|error| format!("failed to list api keys: {error}"))?;
+            let stored = repo.list_api_keys().await.map_err(|error| {
+                HyperTideError::Persistence(format!("failed to list api keys: {error}"))
+            })?;
             for (key_hash, row) in stored {
                 keys.push(ApiKey {
                     key: key_hash,
@@ -346,19 +353,20 @@ impl AuthManager {
         Ok(keys)
     }
 
-    pub async fn exchange_key_for_tokens(&self, api_key: &str) -> Result<TokenPair, String> {
+    pub async fn exchange_key_for_tokens(
+        &self,
+        api_key: &str,
+    ) -> Result<TokenPair, HyperTideError> {
         let key = self
             .validate_key_any(api_key)
             .await
-            .ok_or_else(|| "Invalid API key".to_string())?;
-        let token_service = self
-            .token_service
-            .as_ref()
-            .ok_or_else(|| "JWT service not configured".to_string())?;
-        let repo = self
-            .repo
-            .as_ref()
-            .ok_or_else(|| "Auth repository not configured".to_string())?;
+            .ok_or_else(|| HyperTideError::Authentication("Invalid API key".to_string()))?;
+        let token_service = self.token_service.as_ref().ok_or_else(|| {
+            HyperTideError::Configuration("JWT service not configured".to_string())
+        })?;
+        let repo = self.repo.as_ref().ok_or_else(|| {
+            HyperTideError::Configuration("Auth repository not configured".to_string())
+        })?;
 
         let permissions = key
             .permissions
@@ -367,18 +375,22 @@ impl AuthManager {
             .collect::<Vec<_>>();
         let family_id = Uuid::new_v4().to_string();
 
-        let access_token = token_service.issue_access_token(
-            &key.owner_id,
-            permissions.clone(),
-            self.access_token_ttl_secs,
-        )?;
-        let refresh_token = token_service.issue_refresh_token(
-            &key.owner_id,
-            permissions,
-            self.refresh_token_ttl_secs,
-            family_id.clone(),
-            None,
-        )?;
+        let access_token = token_service
+            .issue_access_token(
+                &key.owner_id,
+                permissions.clone(),
+                self.access_token_ttl_secs,
+            )
+            .map_err(HyperTideError::Authentication)?;
+        let refresh_token = token_service
+            .issue_refresh_token(
+                &key.owner_id,
+                permissions,
+                self.refresh_token_ttl_secs,
+                family_id.clone(),
+                None,
+            )
+            .map_err(HyperTideError::Authentication)?;
 
         repo.insert_refresh_token(
             &refresh_token,
@@ -388,7 +400,9 @@ impl AuthManager {
             Utc::now() + Duration::seconds(self.refresh_token_ttl_secs),
         )
         .await
-        .map_err(|error| format!("failed to persist refresh token: {error}"))?;
+        .map_err(|error| {
+            HyperTideError::Persistence(format!("failed to persist refresh token: {error}"))
+        })?;
 
         Ok(TokenPair {
             access_token,
@@ -398,51 +412,63 @@ impl AuthManager {
         })
     }
 
-    pub async fn refresh_tokens(&self, refresh_token: &str) -> Result<TokenPair, String> {
-        let token_service = self
-            .token_service
-            .as_ref()
-            .ok_or_else(|| "JWT service not configured".to_string())?;
-        let repo = self
-            .repo
-            .as_ref()
-            .ok_or_else(|| "Auth repository not configured".to_string())?;
+    pub async fn refresh_tokens(&self, refresh_token: &str) -> Result<TokenPair, HyperTideError> {
+        let token_service = self.token_service.as_ref().ok_or_else(|| {
+            HyperTideError::Configuration("JWT service not configured".to_string())
+        })?;
+        let repo = self.repo.as_ref().ok_or_else(|| {
+            HyperTideError::Configuration("Auth repository not configured".to_string())
+        })?;
 
-        let claims = token_service.decode_refresh_token(refresh_token)?;
+        let claims = token_service
+            .decode_refresh_token(refresh_token)
+            .map_err(HyperTideError::Authentication)?;
         let stored = repo
             .find_refresh_token(refresh_token)
             .await
-            .map_err(|error| format!("refresh lookup failed: {error}"))?
-            .ok_or_else(|| "Refresh token not found".to_string())?;
+            .map_err(|error| {
+                HyperTideError::Persistence(format!("refresh lookup failed: {error}"))
+            })?
+            .ok_or_else(|| HyperTideError::Authentication("Refresh token not found".to_string()))?;
 
         if stored.revoked_at.is_some() {
-            return Err("Refresh token revoked".to_string());
+            return Err(HyperTideError::Authentication(
+                "Refresh token revoked".to_string(),
+            ));
         }
         if stored.replaced_by_token_hash.is_some() {
             let _ = repo.revoke_refresh_family(&stored.family_id).await;
-            return Err("Refresh token replay detected; family revoked".to_string());
+            return Err(HyperTideError::Authentication(
+                "Refresh token replay detected; family revoked".to_string(),
+            ));
         }
         if stored.expires_at <= Utc::now() {
             let _ = repo.revoke_refresh_token(refresh_token).await;
-            return Err("Refresh token expired".to_string());
+            return Err(HyperTideError::Authentication(
+                "Refresh token expired".to_string(),
+            ));
         }
 
         let family_id = claims
             .family_id
             .clone()
             .unwrap_or_else(|| stored.family_id.clone());
-        let access_token = token_service.issue_access_token(
-            &claims.sub,
-            claims.permissions.clone(),
-            self.access_token_ttl_secs,
-        )?;
-        let new_refresh_token = token_service.issue_refresh_token(
-            &claims.sub,
-            claims.permissions,
-            self.refresh_token_ttl_secs,
-            family_id.clone(),
-            Some(claims.jti),
-        )?;
+        let access_token = token_service
+            .issue_access_token(
+                &claims.sub,
+                claims.permissions.clone(),
+                self.access_token_ttl_secs,
+            )
+            .map_err(HyperTideError::Authentication)?;
+        let new_refresh_token = token_service
+            .issue_refresh_token(
+                &claims.sub,
+                claims.permissions,
+                self.refresh_token_ttl_secs,
+                family_id.clone(),
+                Some(claims.jti),
+            )
+            .map_err(HyperTideError::Authentication)?;
 
         repo.insert_refresh_token(
             &new_refresh_token,
@@ -452,10 +478,14 @@ impl AuthManager {
             Utc::now() + Duration::seconds(self.refresh_token_ttl_secs),
         )
         .await
-        .map_err(|error| format!("failed to persist rotated refresh token: {error}"))?;
+        .map_err(|error| {
+            HyperTideError::Persistence(format!("failed to persist rotated refresh token: {error}"))
+        })?;
         repo.mark_refresh_replaced(refresh_token, &new_refresh_token)
             .await
-            .map_err(|error| format!("failed to mark refresh rotation: {error}"))?;
+            .map_err(|error| {
+                HyperTideError::Persistence(format!("failed to mark refresh rotation: {error}"))
+            })?;
 
         Ok(TokenPair {
             access_token,
@@ -465,14 +495,15 @@ impl AuthManager {
         })
     }
 
-    pub async fn revoke_refresh_token(&self, refresh_token: &str) -> Result<bool, String> {
-        let repo = self
-            .repo
-            .as_ref()
-            .ok_or_else(|| "Auth repository not configured".to_string())?;
+    pub async fn revoke_refresh_token(&self, refresh_token: &str) -> Result<bool, HyperTideError> {
+        let repo = self.repo.as_ref().ok_or_else(|| {
+            HyperTideError::Configuration("Auth repository not configured".to_string())
+        })?;
         repo.revoke_refresh_token(refresh_token)
             .await
-            .map_err(|error| format!("failed to revoke refresh token: {error}"))
+            .map_err(|error| {
+                HyperTideError::Persistence(format!("failed to revoke refresh token: {error}"))
+            })
     }
 
     pub fn is_dev_master_key(&self, key: &str) -> bool {
