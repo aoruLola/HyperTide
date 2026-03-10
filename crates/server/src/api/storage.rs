@@ -146,8 +146,13 @@ pub async fn check_exists(
         return (status, Json(ApiResponse::err(message)));
     }
 
-    let exists = state.storage_manager.exists(&hash).await;
-    (StatusCode::OK, Json(ApiResponse::ok(exists)))
+    match state.storage_manager.exists(&hash).await {
+        Ok(exists) => (StatusCode::OK, Json(ApiResponse::ok(exists))),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::err(error)),
+        ),
+    }
 }
 
 /// GET /v2/storage/hash

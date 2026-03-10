@@ -21,6 +21,12 @@ pub struct StorageManager {
 }
 
 impl StorageManager {
+    async fn check_path_exists(path: &Path, context: &str) -> Result<bool, String> {
+        fs::try_exists(path)
+            .await
+            .map_err(|e| format!("Failed to check {}: {}", context, e))
+    }
+
     /// Create a new storage manager with the given root directory
     pub fn new(storage_root: impl AsRef<Path>) -> Self {
         Self {
@@ -63,7 +69,7 @@ impl StorageManager {
         let object_path = object_dir.join(rest);
 
         // Check if already exists (deduplication)
-        if object_path.exists() {
+        if Self::check_path_exists(&object_path, "object existence before store").await? {
             return Ok(StoredFile {
                 hash,
                 original_path: original_path.to_string(),
@@ -93,10 +99,20 @@ impl StorageManager {
 
         // Atomic rename. If another writer already won the race, treat as idempotent success.
         if let Err(rename_error) = fs::rename(&temp_path, &object_path).await {
-            if object_path.exists() {
-                let _ = fs::remove_file(&temp_path).await;
-            } else {
-                return Err(format!("Failed to move file to storage: {}", rename_error));
+            match Self::check_path_exists(&object_path, "object existence after rename race").await
+            {
+                Ok(true) => {
+                    let _ = fs::remove_file(&temp_path).await;
+                }
+                Ok(false) => {
+                    return Err(format!("Failed to move file to storage: {}", rename_error));
+                }
+                Err(exists_error) => {
+                    return Err(format!(
+                        "Failed to move file to storage: {}; additionally failed to verify object existence: {}",
+                        rename_error, exists_error
+                    ));
+                }
             }
         }
 
@@ -117,7 +133,7 @@ impl StorageManager {
         let (prefix, rest) = hash.split_at(2);
         let object_path = self.storage_root.join("objects").join(prefix).join(rest);
 
-        if !object_path.exists() {
+        if !Self::check_path_exists(&object_path, "object existence before retrieve").await? {
             return Err(format!("Object not found: {}", hash));
         }
 
@@ -127,14 +143,14 @@ impl StorageManager {
     }
 
     /// Check if a file with given hash exists
-    pub async fn exists(&self, hash: &str) -> bool {
+    pub async fn exists(&self, hash: &str) -> Result<bool, String> {
         if hash.len() < 3 {
-            return false;
+            return Ok(false);
         }
 
         let (prefix, rest) = hash.split_at(2);
         let object_path = self.storage_root.join("objects").join(prefix).join(rest);
-        object_path.exists()
+        Self::check_path_exists(&object_path, "object existence").await
     }
 
     /// Get the local file path for a hash (for direct access)
@@ -145,5 +161,130 @@ impl StorageManager {
 
         let (prefix, rest) = hash.split_at(2);
         Some(self.storage_root.join("objects").join(prefix).join(rest))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StorageManager;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn make_storage_root(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "hypertide-storage-tests-{name}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create temp storage root");
+        root
+    }
+
+    #[tokio::test]
+    async fn concurrent_same_hash_store_is_idempotent() {
+        let root = make_storage_root("concurrent");
+        let manager = StorageManager::new(&root);
+        manager.init().await.expect("init storage");
+
+        let payload = b"same-bytes-for-all-writers".to_vec();
+        let mut tasks = Vec::new();
+
+        for _ in 0..16 {
+            let mgr = manager.clone();
+            let data = payload.clone();
+            tasks.push(tokio::spawn(
+                async move { mgr.store(&data, "foo.bin").await },
+            ));
+        }
+
+        let mut results = Vec::new();
+        for task in tasks {
+            results.push(task.await.expect("join task").expect("store success"));
+        }
+        let first_hash = results[0].hash.clone();
+
+        for stored in results {
+            assert_eq!(stored.hash, first_hash);
+        }
+
+        let object = manager
+            .retrieve(&first_hash)
+            .await
+            .expect("retrieve object");
+        assert_eq!(object, payload);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
+    async fn store_reports_permission_error_on_objects_dir() {
+        let root = make_storage_root("permission-store");
+        let manager = StorageManager::new(&root);
+        manager.init().await.expect("init storage");
+
+        let objects = root.join("objects");
+        let mut perms = std::fs::metadata(&objects).expect("metadata").permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&objects, perms).expect("chmod objects");
+
+        let permission_attempt = manager.store(b"blocked", "blocked.bin").await;
+
+        let mut restore = std::fs::metadata(&objects).expect("metadata").permissions();
+        restore.set_mode(0o755);
+        std::fs::set_permissions(&objects, restore).expect("restore chmod");
+
+        if let Err(error) = permission_attempt {
+            assert!(
+                error.contains("Failed to create object subdir")
+                    || error.contains("Failed to check object existence before store")
+            );
+        } else {
+            // In privileged environments permission bits may not block access;
+            // fall back to a deterministic filesystem failure.
+            let fallback_hash = StorageManager::calculate_hash(b"blocked-fallback");
+            let blocked_prefix = root.join("objects").join(&fallback_hash[..2]);
+            std::fs::write(&blocked_prefix, b"not-a-directory").expect("poison prefix dir");
+            let fallback = manager.store(b"blocked-fallback", "blocked.bin").await;
+            let fallback_error = fallback.expect_err("store should fail on poisoned prefix dir");
+            assert!(
+                fallback_error.contains("Failed to create object subdir")
+                    || fallback_error.contains("Failed to check object existence before store")
+            );
+            std::fs::remove_file(blocked_prefix).ok();
+        }
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
+    async fn retrieve_and_exists_report_errors_when_target_dir_is_broken() {
+        let root = make_storage_root("broken-target");
+        let manager = StorageManager::new(&root);
+        manager.init().await.expect("init storage");
+
+        let stored = manager
+            .store(b"hello", "hello.bin")
+            .await
+            .expect("store initial object");
+
+        let (prefix, rest) = stored.hash.split_at(2);
+        let object_dir = root.join("objects").join(prefix);
+        let object_path = object_dir.join(rest);
+
+        std::fs::remove_file(&object_path).expect("remove object file");
+        std::fs::remove_dir_all(&object_dir).expect("remove hash directory");
+        std::fs::write(&object_dir, b"not-a-directory").expect("replace directory with file");
+
+        let retrieve_err = manager
+            .retrieve(&stored.hash)
+            .await
+            .expect_err("retrieve should fail");
+        assert!(retrieve_err.contains("Failed to check object existence before retrieve"));
+
+        let exists_err = manager
+            .exists(&stored.hash)
+            .await
+            .expect_err("exists should fail");
+        assert!(exists_err.contains("Failed to check object existence"));
+
+        std::fs::remove_file(object_dir).ok();
+        std::fs::remove_dir_all(root).ok();
     }
 }
