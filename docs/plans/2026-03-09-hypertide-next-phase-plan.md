@@ -132,6 +132,30 @@ CLI 策略：
 3. 为 `checkout/status/diff/add --file/remove/chunk-upload --manifest-only` 增加更多回归测试
 4. 把验证矩阵中的 workspace/CLI 场景并入现有 smoke 与后端测试基线
 
+## PR 拆分补充：Legacy CLI 入口清理
+
+### PR1：删除 legacy 入口 `src/bin/ht.rs`
+
+目标：把 CLI 入口统一收敛到 `crates/cli/src/main.rs`，避免根目录旧入口与 workspace 结构并存。
+
+#### 差异兜底校验（新增）
+
+1. 除常规 diff 检查外，必须对 `src/bin/ht.rs` 做专项校验：
+   - 代码中是否仍引用该文件路径
+   - 文档中是否仍把该文件当作当前 CLI 入口
+   - 脚本与发布流程是否仍依赖该路径
+2. 全文检索至少覆盖：`src/bin/ht.rs`、`bin/ht.rs`、`CLI 入口` 相关说明。
+3. 检查范围至少包含：`deploy/`、`docs/`、`README.md`、`CONTRIBUTING.md`。
+4. 若发现“当前流程”引用旧入口，先迁移到 `crates/cli/src/main.rs` 对应入口再删除文件；仅历史归档文档可保留旧描述。
+
+#### 删除前依赖证明（需写入 PR 描述）
+
+PR 描述需显式给出以下证明项，确认删除 `src/bin/ht.rs` 不会破坏流程：
+
+1. workspace members 与包定义已由 `crates/cli` 承载 CLI 二进制（`ht`）。
+2. 构建脚本（如 `deploy/cli/package.ps1`、`deploy/cli/package.sh`）通过 `-p hypertide-cli --bin ht` 构建，不依赖 `src/bin/ht.rs` 路径。
+3. 发布/验收脚本（如 smoke、部署文档中的运行命令）均通过 package + bin 名称调用 CLI，不依赖旧入口文件路径。
+
 ## Assumptions
 
 1. HyperTide 下一阶段继续采用同仓库 workspace 结构：`hypertide-server` + `hypertide-cli`
