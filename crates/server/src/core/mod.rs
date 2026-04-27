@@ -8,6 +8,7 @@ pub mod events;
 pub mod high_risk;
 pub mod lock;
 pub mod replay;
+pub mod session;
 pub mod storage;
 pub mod versioning;
 pub mod witness;

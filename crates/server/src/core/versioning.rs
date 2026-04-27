@@ -96,6 +96,20 @@ pub struct ChangesetRecord {
     pub staging_ref: Option<String>,
     #[serde(default)]
     pub visible_ref: Option<String>,
+    #[serde(default)]
+    pub intent_id: Option<String>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default)]
+    pub agent_run_id: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub parent_checkpoint_id: Option<String>,
+    #[serde(default)]
+    pub risk_level: Option<String>,
+    #[serde(default)]
+    pub semantic_summary: Option<String>,
     pub assets: Vec<AssetDelta>,
 }
 
@@ -118,6 +132,13 @@ pub struct SubmitChangesetInput {
     pub author: String,
     pub message: String,
     pub visibility: ChangesetVisibility,
+    pub intent_id: Option<String>,
+    pub task_id: Option<String>,
+    pub agent_run_id: Option<String>,
+    pub session_id: Option<String>,
+    pub parent_checkpoint_id: Option<String>,
+    pub risk_level: Option<String>,
+    pub semantic_summary: Option<String>,
     pub assets: Vec<AssetDelta>,
 }
 
@@ -768,6 +789,13 @@ impl VersionManager {
             author,
             message,
             visibility,
+            intent_id,
+            task_id,
+            agent_run_id,
+            session_id,
+            parent_checkpoint_id,
+            risk_level,
+            semantic_summary,
             assets,
         } = input;
 
@@ -864,6 +892,13 @@ impl VersionManager {
             promoted_at: None,
             staging_ref: staging_ref_value,
             visible_ref: visible_ref_value,
+            intent_id,
+            task_id,
+            agent_run_id,
+            session_id,
+            parent_checkpoint_id,
+            risk_level,
+            semantic_summary,
             assets: normalized_assets,
         };
 
@@ -1041,6 +1076,13 @@ mod tests {
                 author: "alice".to_string(),
                 message: "first".to_string(),
                 visibility: ChangesetVisibility::Visible,
+                intent_id: None,
+                task_id: None,
+                agent_run_id: None,
+                session_id: None,
+                parent_checkpoint_id: None,
+                risk_level: None,
+                semantic_summary: None,
                 assets: vec![AssetDelta {
                     asset_id: None,
                     path: "a.txt".to_string(),
@@ -1061,6 +1103,13 @@ mod tests {
                 author: "alice".to_string(),
                 message: "second".to_string(),
                 visibility: ChangesetVisibility::Visible,
+                intent_id: None,
+                task_id: None,
+                agent_run_id: None,
+                session_id: None,
+                parent_checkpoint_id: None,
+                risk_level: None,
+                semantic_summary: None,
                 assets: vec![AssetDelta {
                     asset_id: None,
                     path: "a.txt".to_string(),
@@ -1093,6 +1142,13 @@ mod tests {
                 author: "alice".to_string(),
                 message: "first".to_string(),
                 visibility: ChangesetVisibility::Visible,
+                intent_id: None,
+                task_id: None,
+                agent_run_id: None,
+                session_id: None,
+                parent_checkpoint_id: None,
+                risk_level: None,
+                semantic_summary: None,
                 assets: vec![],
             })
             .await
@@ -1108,6 +1164,13 @@ mod tests {
                 author: "alice".to_string(),
                 message: "invalid".to_string(),
                 visibility: ChangesetVisibility::Visible,
+                intent_id: None,
+                task_id: None,
+                agent_run_id: None,
+                session_id: None,
+                parent_checkpoint_id: None,
+                risk_level: None,
+                semantic_summary: None,
                 assets: vec![],
             })
             .await
@@ -1137,6 +1200,13 @@ mod tests {
                 author: "alice".to_string(),
                 message: "first".to_string(),
                 visibility: ChangesetVisibility::Visible,
+                intent_id: None,
+                task_id: None,
+                agent_run_id: None,
+                session_id: None,
+                parent_checkpoint_id: None,
+                risk_level: None,
+                semantic_summary: None,
                 assets: vec![AssetDelta {
                     asset_id: None,
                     path: "a".to_string(),
@@ -1157,6 +1227,13 @@ mod tests {
                 author: "alice".to_string(),
                 message: "second".to_string(),
                 visibility: ChangesetVisibility::Visible,
+                intent_id: None,
+                task_id: None,
+                agent_run_id: None,
+                session_id: None,
+                parent_checkpoint_id: None,
+                risk_level: None,
+                semantic_summary: None,
                 assets: vec![AssetDelta {
                     asset_id: None,
                     path: "a".to_string(),
@@ -1184,6 +1261,13 @@ mod tests {
                 author: "alice".to_string(),
                 message: "rollback".to_string(),
                 visibility: ChangesetVisibility::Visible,
+                intent_id: None,
+                task_id: None,
+                agent_run_id: None,
+                session_id: None,
+                parent_checkpoint_id: None,
+                risk_level: None,
+                semantic_summary: None,
                 assets: plan.assets,
             })
             .await
@@ -1209,6 +1293,13 @@ mod tests {
                 author: "alice".to_string(),
                 message: "base".to_string(),
                 visibility: ChangesetVisibility::Visible,
+                intent_id: None,
+                task_id: None,
+                agent_run_id: None,
+                session_id: None,
+                parent_checkpoint_id: None,
+                risk_level: None,
+                semantic_summary: None,
                 assets: vec![],
             })
             .await
@@ -1224,6 +1315,13 @@ mod tests {
                 author: "alice".to_string(),
                 message: "draft".to_string(),
                 visibility: ChangesetVisibility::Draft,
+                intent_id: None,
+                task_id: None,
+                agent_run_id: None,
+                session_id: None,
+                parent_checkpoint_id: None,
+                risk_level: None,
+                semantic_summary: None,
                 assets: vec![],
             })
             .await
@@ -1260,6 +1358,13 @@ mod tests {
                 author: "alice".to_string(),
                 message: "base".to_string(),
                 visibility: ChangesetVisibility::Visible,
+                intent_id: None,
+                task_id: None,
+                agent_run_id: None,
+                session_id: None,
+                parent_checkpoint_id: None,
+                risk_level: None,
+                semantic_summary: None,
                 assets: vec![],
             })
             .await
@@ -1275,6 +1380,13 @@ mod tests {
                 author: "alice".to_string(),
                 message: "draft".to_string(),
                 visibility: ChangesetVisibility::Draft,
+                intent_id: None,
+                task_id: None,
+                agent_run_id: None,
+                session_id: None,
+                parent_checkpoint_id: None,
+                risk_level: None,
+                semantic_summary: None,
                 assets: vec![],
             })
             .await
@@ -1299,6 +1411,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn submit_preserves_agent_session_metadata() {
+        let manager = VersionManager::new();
+
+        let changeset = manager
+            .submit_changeset(SubmitChangesetInput {
+                repo_id: "repo-agent-meta".to_string(),
+                branch: "main".to_string(),
+                base_changeset_id: Some(ROOT_BASE_CHANGESET_ID.to_string()),
+                kind: ChangesetKind::Normal,
+                rollback_of: None,
+                author: "agent-a".to_string(),
+                message: "draft from checkpoint".to_string(),
+                visibility: ChangesetVisibility::Draft,
+                intent_id: Some("intent-1".to_string()),
+                task_id: Some("task-1".to_string()),
+                agent_run_id: Some("run-1".to_string()),
+                session_id: Some("session-1".to_string()),
+                parent_checkpoint_id: Some("checkpoint-1".to_string()),
+                risk_level: Some("local".to_string()),
+                semantic_summary: Some("inventory implementation draft".to_string()),
+                assets: vec![],
+            })
+            .await
+            .expect("draft changeset");
+
+        assert_eq!(changeset.status, ChangesetStatus::Draft);
+        assert_eq!(changeset.intent_id.as_deref(), Some("intent-1"));
+        assert_eq!(changeset.task_id.as_deref(), Some("task-1"));
+        assert_eq!(changeset.agent_run_id.as_deref(), Some("run-1"));
+        assert_eq!(changeset.session_id.as_deref(), Some("session-1"));
+        assert_eq!(
+            changeset.parent_checkpoint_id.as_deref(),
+            Some("checkpoint-1")
+        );
+        assert_eq!(changeset.risk_level.as_deref(), Some("local"));
+        assert_eq!(
+            changeset.semantic_summary.as_deref(),
+            Some("inventory implementation draft")
+        );
+    }
+
+    #[tokio::test]
     async fn persists_state_across_manager_restarts() {
         let state_file =
             std::env::temp_dir().join(format!("hypertide-versioning-{}.json", Uuid::new_v4()));
@@ -1314,6 +1468,13 @@ mod tests {
                 author: "alice".to_string(),
                 message: "first".to_string(),
                 visibility: ChangesetVisibility::Visible,
+                intent_id: None,
+                task_id: None,
+                agent_run_id: None,
+                session_id: None,
+                parent_checkpoint_id: None,
+                risk_level: None,
+                semantic_summary: None,
                 assets: vec![AssetDelta {
                     asset_id: None,
                     path: "env/config.json".to_string(),
