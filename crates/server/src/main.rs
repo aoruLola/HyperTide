@@ -24,6 +24,10 @@ use crate::api::auth::{
 use crate::api::blobs::{missing_chunks, upload_chunk};
 use crate::api::lock::{force_unlock_file, list_locks, lock_file, renew_lock_file, unlock_file};
 use crate::api::manifests::{compose_blob, create_manifest};
+use crate::api::session::{
+    checkpoint_snapshot, create_checkpoint as create_session_checkpoint, create_session,
+    list_checkpoints as list_session_checkpoints, save_session,
+};
 use crate::api::storage::{calculate_hash, check_exists, download_file, upload_file};
 use crate::api::trust::{
     attest_checkpoint, export_audit_entries, generate_checkpoint, latest_checkpoint,
@@ -44,6 +48,7 @@ use crate::core::events::EventStore;
 use crate::core::high_risk::HighRiskGuard;
 use crate::core::lock::LockManager;
 use crate::core::replay::ReplayService;
+use crate::core::session::SessionManager;
 use crate::core::storage::StorageManager;
 use crate::core::versioning::VersionManager;
 use crate::core::witness::WitnessService;
@@ -67,6 +72,7 @@ pub struct AppState {
     pub storage_manager: StorageManager,
     pub auth_manager: AuthManager,
     pub version_manager: VersionManager,
+    pub session_manager: SessionManager,
     pub event_store: Option<EventStore>,
     pub audit_chain: Option<AuditChain>,
     pub checkpoint_service: Option<CheckpointService>,
@@ -98,6 +104,12 @@ impl FromRef<AppState> for AuthManager {
 impl FromRef<AppState> for VersionManager {
     fn from_ref(state: &AppState) -> Self {
         state.version_manager.clone()
+    }
+}
+
+impl FromRef<AppState> for SessionManager {
+    fn from_ref(state: &AppState) -> Self {
+        state.session_manager.clone()
     }
 }
 
@@ -156,6 +168,16 @@ fn build_app(state: AppState, config: &AppConfig) -> Router {
         .route("/v2/history/:repo_id", get(list_history))
         .route("/v2/rollback", post(rollback))
         .route("/v2/sync/:repo_id", get(sync_snapshot))
+        .route("/v2/sessions", post(create_session))
+        .route("/v2/sessions/:session_id/save", post(save_session))
+        .route(
+            "/v2/sessions/:session_id/checkpoints",
+            post(create_session_checkpoint).get(list_session_checkpoints),
+        )
+        .route(
+            "/v2/checkpoints/:checkpoint_id/snapshot",
+            get(checkpoint_snapshot),
+        )
         .route("/v2/trust/checkpoints/generate", post(generate_checkpoint))
         .route("/v2/trust/checkpoints/latest", get(latest_checkpoint))
         .route(
@@ -250,12 +272,20 @@ async fn main() {
             return;
         }
     };
+    let session_manager = match SessionManager::with_pg(db_pool.clone()).await {
+        Ok(manager) => manager,
+        Err(e) => {
+            tracing::error!("Failed to initialize session manager: {e}");
+            return;
+        }
+    };
 
     let state = AppState {
         lock_manager,
         storage_manager,
         auth_manager,
         version_manager,
+        session_manager,
         event_store: Some(EventStore::new(db_pool.clone())),
         audit_chain: Some(AuditChain::new(db_pool.clone())),
         checkpoint_service: Some(CheckpointService::new(db_pool.clone())),
@@ -339,6 +369,7 @@ mod tests {
             storage_manager: StorageManager::new("./storage"),
             auth_manager: AuthManager::with_dev_key(test_master_key()),
             version_manager: VersionManager::new(),
+            session_manager: SessionManager::new(),
             event_store: None,
             audit_chain: None,
             checkpoint_service: None,
@@ -712,6 +743,295 @@ mod tests {
 
         let response = app.oneshot(request).await.expect("response");
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn session_checkpoint_routes_create_and_return_snapshot() {
+        let app = build_app(test_state(), &test_config());
+
+        let session_payload = serde_json::json!({
+            "repo_id": "repo-agent",
+            "branch": "main",
+            "base_changeset_id": "ROOT",
+            "workspace_root": "E:/workspace/game",
+            "intent_id": "intent-1",
+            "task_id": "task-1",
+            "agent_run_id": "run-1",
+            "trigger_reason": "agent_save",
+            "risk_level": "local",
+            "semantic_summary": "saving agent progress"
+        });
+        let session_request = Request::builder()
+            .method("POST")
+            .uri("/v2/sessions")
+            .header("content-type", "application/json")
+            .header("X-API-Key", test_master_key())
+            .body(Body::from(session_payload.to_string()))
+            .expect("session request");
+
+        let session_response = app
+            .clone()
+            .oneshot(session_request)
+            .await
+            .expect("session response");
+        assert_eq!(session_response.status(), StatusCode::CREATED);
+        let session_body = to_bytes(session_response.into_body(), usize::MAX)
+            .await
+            .expect("session body");
+        let session_json: Value = serde_json::from_slice(&session_body).expect("session json");
+        let session_id = session_json["data"]["session_id"]
+            .as_str()
+            .expect("session id")
+            .to_string();
+        assert_eq!(
+            session_json["data"]["actor_id"],
+            Value::String("dev-admin".to_string())
+        );
+
+        let checkpoint_payload = serde_json::json!({
+            "trigger_reason": "manual_checkpoint",
+            "semantic_summary": "inventory draft checkpoint",
+            "assets": [
+                {
+                    "asset_id": "asset-inventory",
+                    "path": "Assets/inventory.json",
+                    "blob_hash": "hash-inventory"
+                }
+            ]
+        });
+        let checkpoint_request = Request::builder()
+            .method("POST")
+            .uri(format!("/v2/sessions/{session_id}/checkpoints"))
+            .header("content-type", "application/json")
+            .header("X-API-Key", test_master_key())
+            .body(Body::from(checkpoint_payload.to_string()))
+            .expect("checkpoint request");
+
+        let checkpoint_response = app
+            .clone()
+            .oneshot(checkpoint_request)
+            .await
+            .expect("checkpoint response");
+        assert_eq!(checkpoint_response.status(), StatusCode::CREATED);
+        let checkpoint_body = to_bytes(checkpoint_response.into_body(), usize::MAX)
+            .await
+            .expect("checkpoint body");
+        let checkpoint_json: Value =
+            serde_json::from_slice(&checkpoint_body).expect("checkpoint json");
+        let checkpoint_id = checkpoint_json["data"]["checkpoint_id"]
+            .as_str()
+            .expect("checkpoint id")
+            .to_string();
+        assert_eq!(
+            checkpoint_json["data"]["parent_checkpoint_id"],
+            Value::Null,
+            "first checkpoint has no parent checkpoint"
+        );
+
+        let snapshot_request = Request::builder()
+            .uri(format!("/v2/checkpoints/{checkpoint_id}/snapshot"))
+            .header("X-API-Key", test_master_key())
+            .body(Body::empty())
+            .expect("snapshot request");
+        let snapshot_response = app
+            .clone()
+            .oneshot(snapshot_request)
+            .await
+            .expect("snapshot response");
+        assert_eq!(snapshot_response.status(), StatusCode::OK);
+        let snapshot_body = to_bytes(snapshot_response.into_body(), usize::MAX)
+            .await
+            .expect("snapshot body");
+        let snapshot_json: Value = serde_json::from_slice(&snapshot_body).expect("snapshot json");
+        assert_eq!(
+            snapshot_json["data"]["assets"][0]["path"],
+            Value::String("Assets/inventory.json".to_string())
+        );
+
+        let list_request = Request::builder()
+            .uri(format!("/v2/sessions/{session_id}/checkpoints"))
+            .header("X-API-Key", test_master_key())
+            .body(Body::empty())
+            .expect("list request");
+        let list_response = app.oneshot(list_request).await.expect("list response");
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_body = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .expect("list body");
+        let list_json: Value = serde_json::from_slice(&list_body).expect("list json");
+        assert_eq!(
+            list_json["data"]["items"].as_array().expect("items").len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_from_expired_checkpoint_is_rejected() {
+        let app = build_app(test_state(), &test_config());
+
+        let session_payload = serde_json::json!({
+            "repo_id": "repo-agent-expired",
+            "branch": "main",
+            "base_changeset_id": "ROOT",
+            "workspace_root": "E:/workspace/game"
+        });
+        let session_request = Request::builder()
+            .method("POST")
+            .uri("/v2/sessions")
+            .header("content-type", "application/json")
+            .header("X-API-Key", test_master_key())
+            .body(Body::from(session_payload.to_string()))
+            .expect("session request");
+        let session_response = app
+            .clone()
+            .oneshot(session_request)
+            .await
+            .expect("session response");
+        assert_eq!(session_response.status(), StatusCode::CREATED);
+        let session_body = to_bytes(session_response.into_body(), usize::MAX)
+            .await
+            .expect("session body");
+        let session_json: Value = serde_json::from_slice(&session_body).expect("session json");
+        let session_id = session_json["data"]["session_id"]
+            .as_str()
+            .expect("session id")
+            .to_string();
+
+        let checkpoint_payload = serde_json::json!({
+            "expires_at": "2000-01-01T00:00:00Z",
+            "assets": [
+                {
+                    "asset_id": "asset-a",
+                    "path": "Assets/a.txt",
+                    "blob_hash": "hash-a"
+                }
+            ]
+        });
+        let checkpoint_request = Request::builder()
+            .method("POST")
+            .uri(format!("/v2/sessions/{session_id}/checkpoints"))
+            .header("content-type", "application/json")
+            .header("X-API-Key", test_master_key())
+            .body(Body::from(checkpoint_payload.to_string()))
+            .expect("checkpoint request");
+        let checkpoint_response = app
+            .clone()
+            .oneshot(checkpoint_request)
+            .await
+            .expect("checkpoint response");
+        assert_eq!(checkpoint_response.status(), StatusCode::CREATED);
+        let checkpoint_body = to_bytes(checkpoint_response.into_body(), usize::MAX)
+            .await
+            .expect("checkpoint body");
+        let checkpoint_json: Value =
+            serde_json::from_slice(&checkpoint_body).expect("checkpoint json");
+        let checkpoint_id = checkpoint_json["data"]["checkpoint_id"]
+            .as_str()
+            .expect("checkpoint id");
+
+        let submit_payload = serde_json::json!({
+            "repo_id": "repo-agent-expired",
+            "branch": "main",
+            "base_changeset_id": "ROOT",
+            "author": "dev-admin",
+            "message": "submit from expired checkpoint",
+            "parent_checkpoint_id": checkpoint_id,
+            "assets": []
+        });
+        let submit_request = Request::builder()
+            .method("POST")
+            .uri("/v2/changesets")
+            .header("content-type", "application/json")
+            .header("X-API-Key", test_master_key())
+            .body(Body::from(submit_payload.to_string()))
+            .expect("submit request");
+        let submit_response = app.oneshot(submit_request).await.expect("submit response");
+
+        assert_eq!(submit_response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn submit_from_checkpoint_rejects_repo_or_branch_mismatch() {
+        let app = build_app(test_state(), &test_config());
+
+        let session_payload = serde_json::json!({
+            "repo_id": "repo-source",
+            "branch": "main",
+            "base_changeset_id": "ROOT",
+            "workspace_root": "E:/workspace/game"
+        });
+        let session_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v2/sessions")
+                    .header("content-type", "application/json")
+                    .header("X-API-Key", test_master_key())
+                    .body(Body::from(session_payload.to_string()))
+                    .expect("session request"),
+            )
+            .await
+            .expect("session response");
+        assert_eq!(session_response.status(), StatusCode::CREATED);
+        let session_body = to_bytes(session_response.into_body(), usize::MAX)
+            .await
+            .expect("session body");
+        let session_json: Value = serde_json::from_slice(&session_body).expect("session json");
+        let session_id = session_json["data"]["session_id"]
+            .as_str()
+            .expect("session id")
+            .to_string();
+
+        let checkpoint_payload = serde_json::json!({
+            "assets": []
+        });
+        let checkpoint_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v2/sessions/{session_id}/checkpoints"))
+                    .header("content-type", "application/json")
+                    .header("X-API-Key", test_master_key())
+                    .body(Body::from(checkpoint_payload.to_string()))
+                    .expect("checkpoint request"),
+            )
+            .await
+            .expect("checkpoint response");
+        assert_eq!(checkpoint_response.status(), StatusCode::CREATED);
+        let checkpoint_body = to_bytes(checkpoint_response.into_body(), usize::MAX)
+            .await
+            .expect("checkpoint body");
+        let checkpoint_json: Value =
+            serde_json::from_slice(&checkpoint_body).expect("checkpoint json");
+        let checkpoint_id = checkpoint_json["data"]["checkpoint_id"]
+            .as_str()
+            .expect("checkpoint id");
+
+        let submit_payload = serde_json::json!({
+            "repo_id": "repo-other",
+            "branch": "main",
+            "base_changeset_id": "ROOT",
+            "author": "dev-admin",
+            "message": "wrong repo",
+            "parent_checkpoint_id": checkpoint_id,
+            "assets": []
+        });
+        let submit_response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v2/changesets")
+                    .header("content-type", "application/json")
+                    .header("X-API-Key", test_master_key())
+                    .body(Body::from(submit_payload.to_string()))
+                    .expect("submit request"),
+            )
+            .await
+            .expect("submit response");
+
+        assert_eq!(submit_response.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]

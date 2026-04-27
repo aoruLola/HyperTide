@@ -25,6 +25,10 @@ enum Command {
     Branch(BranchArgs),
     Add(AddArgs),
     Remove(RemoveArgs),
+    #[command(about = "Save current workspace progress")]
+    Save(SaveArgs),
+    #[command(about = "Create, restore, or branch from checkpoints")]
+    Checkpoint(CheckpointArgs),
     Submit(SubmitArgs),
     Log(LogArgs),
     Rollback(RollbackArgs),
@@ -116,6 +120,61 @@ struct SubmitArgs {
     branch: Option<String>,
     #[arg(long, default_value = "submit")]
     message: String,
+    #[arg(long)]
+    visibility: Option<String>,
+    #[arg(long)]
+    from_checkpoint: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct SaveArgs {
+    #[arg(long)]
+    repo: Option<String>,
+    #[arg(long)]
+    branch: Option<String>,
+    #[arg(long)]
+    session: Option<String>,
+    #[arg(long)]
+    message: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct CheckpointArgs {
+    #[command(subcommand)]
+    command: CheckpointCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum CheckpointCommand {
+    Create(CheckpointCreateArgs),
+    Restore(CheckpointRestoreArgs),
+    Branch(CheckpointBranchArgs),
+}
+
+#[derive(Debug, Args)]
+struct CheckpointCreateArgs {
+    #[arg(long)]
+    repo: Option<String>,
+    #[arg(long)]
+    branch: Option<String>,
+    #[arg(long)]
+    session: Option<String>,
+    #[arg(long)]
+    message: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct CheckpointRestoreArgs {
+    #[arg(long)]
+    id: String,
+}
+
+#[derive(Debug, Args)]
+struct CheckpointBranchArgs {
+    #[arg(long)]
+    id: String,
+    #[arg(long)]
+    name: String,
 }
 
 #[derive(Debug, Args)]
@@ -241,6 +300,11 @@ struct WorkspaceState {
     last_synced_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct SessionState {
+    current_session_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct FileLockInfo {
     file_path: String,
@@ -362,6 +426,8 @@ struct SyncResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SyncAsset {
+    #[serde(default)]
+    asset_id: Option<String>,
     path: String,
     blob_hash: String,
 }
@@ -379,10 +445,63 @@ struct SubmitRequest<'a> {
     branch: &'a str,
     base_changeset_id: &'a str,
     kind: &'a str,
+    visibility: Option<&'a str>,
     rollback_of: Option<&'a str>,
     author: &'a str,
     message: &'a str,
+    intent_id: Option<&'a str>,
+    task_id: Option<&'a str>,
+    agent_run_id: Option<&'a str>,
+    session_id: Option<&'a str>,
+    parent_checkpoint_id: Option<&'a str>,
+    risk_level: Option<&'a str>,
+    semantic_summary: Option<&'a str>,
     assets: &'a [AssetDelta],
+}
+
+#[derive(Debug, Serialize)]
+struct CreateSessionRequest<'a> {
+    repo_id: &'a str,
+    branch: &'a str,
+    base_changeset_id: Option<&'a str>,
+    workspace_root: &'a str,
+    trigger_reason: &'a str,
+    semantic_summary: Option<&'a str>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentSessionRecord {
+    session_id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateCheckpointRequest<'a> {
+    trigger_reason: &'a str,
+    semantic_summary: Option<&'a str>,
+    assets: &'a [CheckpointAsset],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CheckpointAsset {
+    asset_id: String,
+    path: String,
+    blob_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionCheckpointRecord {
+    checkpoint_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CheckpointSnapshot {
+    checkpoint_id: String,
+    session_id: String,
+    repo_id: String,
+    branch: String,
+    base_changeset_id: Option<String>,
+    workspace_root: String,
+    assets: Vec<CheckpointAsset>,
 }
 
 #[derive(Debug, Serialize)]
@@ -442,6 +561,8 @@ async fn main() -> Result<()> {
         Command::Branch(args) => branch(args).await,
         Command::Add(args) => add(args).await,
         Command::Remove(args) => remove(args).await,
+        Command::Save(args) => save_progress(args).await,
+        Command::Checkpoint(args) => checkpoint(args).await,
         Command::Submit(args) => submit(args).await,
         Command::Log(args) => show_log(args).await,
         Command::Rollback(args) => rollback(args).await,
@@ -637,6 +758,165 @@ async fn remove(args: RemoveArgs) -> Result<()> {
     Ok(())
 }
 
+async fn save_progress(args: SaveArgs) -> Result<()> {
+    let mut profile = load_profile()?;
+    let repo = resolve_repo(&profile, args.repo.as_deref())?;
+    let branch = args
+        .branch
+        .unwrap_or_else(|| profile.current_branch.clone());
+    let client = reqwest::Client::new();
+    let session_id = ensure_session(
+        &client,
+        &mut profile,
+        &repo,
+        &branch,
+        args.session.as_deref(),
+        args.message.as_deref(),
+    )
+    .await?;
+    let assets = collect_checkpoint_assets(&client, &mut profile, &branch).await?;
+    let checkpoint = create_remote_checkpoint(
+        &client,
+        &mut profile,
+        &session_id,
+        "agent_save",
+        args.message.as_deref(),
+        &assets,
+        true,
+    )
+    .await?;
+    println!(
+        "saved checkpoint {} in session {} ({} assets)",
+        checkpoint.checkpoint_id,
+        session_id,
+        assets.len()
+    );
+    Ok(())
+}
+
+async fn checkpoint(args: CheckpointArgs) -> Result<()> {
+    match args.command {
+        CheckpointCommand::Create(cmd) => checkpoint_create(cmd).await,
+        CheckpointCommand::Restore(cmd) => checkpoint_restore(cmd).await,
+        CheckpointCommand::Branch(cmd) => checkpoint_branch(cmd).await,
+    }
+}
+
+async fn checkpoint_create(args: CheckpointCreateArgs) -> Result<()> {
+    let mut profile = load_profile()?;
+    let repo = resolve_repo(&profile, args.repo.as_deref())?;
+    let branch = args
+        .branch
+        .unwrap_or_else(|| profile.current_branch.clone());
+    let client = reqwest::Client::new();
+    let session_id = ensure_session(
+        &client,
+        &mut profile,
+        &repo,
+        &branch,
+        args.session.as_deref(),
+        args.message.as_deref(),
+    )
+    .await?;
+    let assets = collect_checkpoint_assets(&client, &mut profile, &branch).await?;
+    let checkpoint = create_remote_checkpoint(
+        &client,
+        &mut profile,
+        &session_id,
+        "manual_checkpoint",
+        args.message.as_deref(),
+        &assets,
+        false,
+    )
+    .await?;
+    println!(
+        "checkpoint created: {} ({} assets)",
+        checkpoint.checkpoint_id,
+        assets.len()
+    );
+    Ok(())
+}
+
+async fn checkpoint_restore(args: CheckpointRestoreArgs) -> Result<()> {
+    let mut profile = load_profile()?;
+    let client = reqwest::Client::new();
+    let snapshot = fetch_checkpoint_snapshot(&client, &mut profile, &args.id).await?;
+    materialize_checkpoint_snapshot(&client, &mut profile, &snapshot).await?;
+    println!(
+        "restored checkpoint {} to {} ({} assets)",
+        snapshot.checkpoint_id,
+        snapshot.workspace_root,
+        snapshot.assets.len()
+    );
+    Ok(())
+}
+
+async fn checkpoint_branch(args: CheckpointBranchArgs) -> Result<()> {
+    let mut profile = load_profile()?;
+    let client = reqwest::Client::new();
+    let snapshot = fetch_checkpoint_snapshot(&client, &mut profile, &args.id).await?;
+    let payload = CreateBranchRequest {
+        repo_id: &snapshot.repo_id,
+        branch: &args.name,
+        from_changeset_id: snapshot.base_changeset_id.as_deref(),
+    };
+    let url = format!("{}/v2/branches", profile.server.trim_end_matches('/'));
+    let response: ApiResponse<BranchRecord> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| with_auth(client.post(&url).json(&payload), profile),
+        "checkpoint branch response decode failed",
+    )
+    .await?;
+    if !response.success {
+        return Err(anyhow!(api_error_message(
+            &response,
+            "checkpoint branch failed"
+        )));
+    }
+    let author = fetch_owner_id(&client, &profile).await?;
+    let submit_assets = checkpoint_assets_to_deltas(&snapshot.assets);
+    let base = snapshot
+        .base_changeset_id
+        .clone()
+        .unwrap_or_else(|| ROOT_BASE_CHANGESET_ID.to_string());
+    let message = format!("draft from checkpoint {}", snapshot.checkpoint_id);
+    let payload = SubmitRequest {
+        repo_id: &snapshot.repo_id,
+        branch: &args.name,
+        base_changeset_id: &base,
+        kind: "normal",
+        visibility: Some("draft"),
+        rollback_of: None,
+        author: &author,
+        message: &message,
+        intent_id: None,
+        task_id: None,
+        agent_run_id: None,
+        session_id: Some(&snapshot.session_id),
+        parent_checkpoint_id: None,
+        risk_level: None,
+        semantic_summary: Some(&message),
+        assets: &submit_assets,
+    };
+    let submit_url = format!("{}/v2/changesets", profile.server.trim_end_matches('/'));
+    let submit_response: ApiResponse<ChangesetRecord> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| with_auth(client.post(&submit_url).json(&payload), profile),
+        "checkpoint branch draft response decode failed",
+    )
+    .await?;
+    if !submit_response.success {
+        return Err(anyhow!(submit_error_message(&submit_response)));
+    }
+    println!(
+        "branch created from checkpoint {}: {}",
+        snapshot.checkpoint_id, args.name
+    );
+    Ok(())
+}
+
 async fn submit(args: SubmitArgs) -> Result<()> {
     let mut profile = load_profile()?;
     let repo = resolve_repo(&profile, args.repo.as_deref())?;
@@ -649,28 +929,57 @@ async fn submit(args: SubmitArgs) -> Result<()> {
     if stage.branch != branch {
         stage = StageFile::default_for_branch(&branch);
     }
-    if stage.assets.is_empty() {
+    let checkpoint_snapshot = if let Some(checkpoint_id) = args.from_checkpoint.as_deref() {
+        Some(fetch_checkpoint_snapshot(&client, &mut profile, checkpoint_id).await?)
+    } else {
+        None
+    };
+    let checkpoint_assets = checkpoint_snapshot
+        .as_ref()
+        .map(|snapshot| checkpoint_assets_to_deltas(&snapshot.assets))
+        .unwrap_or_default();
+    let submit_assets = if checkpoint_assets.is_empty() {
+        stage.assets.clone()
+    } else {
+        checkpoint_assets
+    };
+    if submit_assets.is_empty() {
         return Err(anyhow!("nothing staged; use `ht add --path --blob` first"));
     }
 
-    let base = resolve_base_changeset(
-        &client,
-        &mut profile,
-        &repo,
-        &branch,
-        stage.base_changeset_id.as_deref(),
-    )
-    .await?;
+    let base_hint = checkpoint_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.base_changeset_id.as_deref())
+        .or(stage.base_changeset_id.as_deref());
+    let base = resolve_base_changeset(&client, &mut profile, &repo, &branch, base_hint).await?;
     let author = fetch_owner_id(&client, &profile).await?;
+    let visibility = args
+        .visibility
+        .as_deref()
+        .or_else(|| args.from_checkpoint.as_ref().map(|_| "draft"));
+    let session_id = checkpoint_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.session_id.as_str());
+    let checkpoint_id = checkpoint_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.checkpoint_id.as_str());
     let payload = SubmitRequest {
         repo_id: &repo,
         branch: &branch,
         base_changeset_id: &base,
         kind: "normal",
+        visibility,
         rollback_of: None,
         author: &author,
         message: &args.message,
-        assets: &stage.assets,
+        intent_id: None,
+        task_id: None,
+        agent_run_id: None,
+        session_id,
+        parent_checkpoint_id: checkpoint_id,
+        risk_level: None,
+        semantic_summary: Some(&args.message),
+        assets: &submit_assets,
     };
 
     let url = format!("{}/v2/changesets", profile.server.trim_end_matches('/'));
@@ -685,10 +994,12 @@ async fn submit(args: SubmitArgs) -> Result<()> {
         return Err(anyhow!(submit_error_message(&response)));
     }
     let changeset = response.data.context("missing response data")?;
-    stage.base_changeset_id = Some(changeset.changeset_id.clone());
-    stage.branch = branch.clone();
-    stage.assets.clear();
-    save_stage(&stage)?;
+    if checkpoint_snapshot.is_none() {
+        stage.base_changeset_id = Some(changeset.changeset_id.clone());
+        stage.branch = branch.clone();
+        stage.assets.clear();
+        save_stage(&stage)?;
+    }
     println!(
         "submitted {} on {}@{}",
         changeset.changeset_id, repo, branch
@@ -1158,6 +1469,258 @@ async fn fetch_snapshot(
         return Err(anyhow!(api_error_message(&response, "sync failed")));
     }
     response.data.context("missing response data")
+}
+
+async fn ensure_session(
+    client: &reqwest::Client,
+    profile: &mut CliProfile,
+    repo: &str,
+    branch: &str,
+    requested_session: Option<&str>,
+    message: Option<&str>,
+) -> Result<String> {
+    if let Some(session_id) = requested_session {
+        return Ok(session_id.to_string());
+    }
+    if let Ok(session) = load_session_state() {
+        if let Some(session_id) = session.current_session_id {
+            return Ok(session_id);
+        }
+    }
+
+    let workspace_root = std::env::current_dir()?.to_string_lossy().to_string();
+    let base_changeset_id = load_workspace()
+        .ok()
+        .and_then(|workspace| workspace.base_changeset_id)
+        .or_else(|| load_stage().ok().and_then(|stage| stage.base_changeset_id));
+    let payload = CreateSessionRequest {
+        repo_id: repo,
+        branch,
+        base_changeset_id: base_changeset_id.as_deref(),
+        workspace_root: &workspace_root,
+        trigger_reason: "agent_session",
+        semantic_summary: message,
+    };
+    let url = format!("{}/v2/sessions", profile.server.trim_end_matches('/'));
+    let response: ApiResponse<AgentSessionRecord> = send_authed_api(
+        client,
+        profile,
+        |client, profile| with_auth(client.post(&url).json(&payload), profile),
+        "create session response decode failed",
+    )
+    .await?;
+    if !response.success {
+        return Err(anyhow!(api_error_message(
+            &response,
+            "create session failed"
+        )));
+    }
+    let session = response.data.context("missing session response data")?;
+    save_session_state(&SessionState {
+        current_session_id: Some(session.session_id.clone()),
+    })?;
+    Ok(session.session_id)
+}
+
+async fn create_remote_checkpoint(
+    client: &reqwest::Client,
+    profile: &mut CliProfile,
+    session_id: &str,
+    trigger_reason: &str,
+    message: Option<&str>,
+    assets: &[CheckpointAsset],
+    save_endpoint: bool,
+) -> Result<SessionCheckpointRecord> {
+    let payload = CreateCheckpointRequest {
+        trigger_reason,
+        semantic_summary: message,
+        assets,
+    };
+    let suffix = if save_endpoint {
+        "save".to_string()
+    } else {
+        "checkpoints".to_string()
+    };
+    let url = format!(
+        "{}/v2/sessions/{}/{}",
+        profile.server.trim_end_matches('/'),
+        session_id,
+        suffix
+    );
+    let response: ApiResponse<SessionCheckpointRecord> = send_authed_api(
+        client,
+        profile,
+        |client, profile| with_auth(client.post(&url).json(&payload), profile),
+        "checkpoint response decode failed",
+    )
+    .await?;
+    if !response.success {
+        return Err(anyhow!(api_error_message(
+            &response,
+            "checkpoint create failed"
+        )));
+    }
+    response.data.context("missing checkpoint response data")
+}
+
+async fn fetch_checkpoint_snapshot(
+    client: &reqwest::Client,
+    profile: &mut CliProfile,
+    checkpoint_id: &str,
+) -> Result<CheckpointSnapshot> {
+    let url = format!(
+        "{}/v2/checkpoints/{}/snapshot",
+        profile.server.trim_end_matches('/'),
+        checkpoint_id
+    );
+    let response: ApiResponse<CheckpointSnapshot> = send_authed_api(
+        client,
+        profile,
+        |client, profile| with_auth(client.get(&url), profile),
+        "checkpoint snapshot response decode failed",
+    )
+    .await?;
+    if !response.success {
+        return Err(anyhow!(api_error_message(
+            &response,
+            "checkpoint snapshot failed"
+        )));
+    }
+    response.data.context("missing checkpoint snapshot data")
+}
+
+async fn collect_checkpoint_assets(
+    client: &reqwest::Client,
+    profile: &mut CliProfile,
+    branch: &str,
+) -> Result<Vec<CheckpointAsset>> {
+    let stage = load_stage().unwrap_or_else(|_| StageFile::default_for_branch(branch));
+    if !stage.assets.is_empty() {
+        return Ok(stage
+            .assets
+            .into_iter()
+            .filter_map(|asset| {
+                asset.blob_hash.map(|blob_hash| CheckpointAsset {
+                    asset_id: asset.path.clone(),
+                    path: asset.path,
+                    blob_hash,
+                })
+            })
+            .collect());
+    }
+    let workspace = load_workspace()?;
+    let mut assets = collect_workspace_checkpoint_assets(&workspace)?;
+    let workspace_root = PathBuf::from(&workspace.workspace_root);
+    for asset in &mut assets {
+        let target = resolve_workspace_target(&workspace_root, &asset.path)?;
+        let bytes =
+            fs::read(&target).with_context(|| format!("failed to read {}", target.display()))?;
+        let uploaded = upload_blob_from_bytes(
+            client,
+            profile,
+            &target,
+            &bytes,
+            4 * 1024 * 1024,
+            "fixed-4m",
+            false,
+        )
+        .await?;
+        asset.blob_hash = uploaded.blob_hash;
+    }
+    Ok(assets)
+}
+
+fn collect_workspace_checkpoint_assets(workspace: &WorkspaceState) -> Result<Vec<CheckpointAsset>> {
+    let workspace_root = PathBuf::from(&workspace.workspace_root);
+    workspace
+        .checked_out_assets
+        .iter()
+        .map(|asset| {
+            let target = resolve_workspace_target(&workspace_root, &asset.path)?;
+            let bytes = fs::read(&target)
+                .with_context(|| format!("failed to read {}", target.display()))?;
+            Ok(CheckpointAsset {
+                asset_id: asset.path.clone(),
+                path: asset.path.clone(),
+                blob_hash: hash_bytes(&bytes),
+            })
+        })
+        .collect()
+}
+
+fn hash_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Hasher::new();
+    hasher.update(bytes);
+    hasher.finalize().to_hex().to_string()
+}
+
+fn checkpoint_assets_to_deltas(assets: &[CheckpointAsset]) -> Vec<AssetDelta> {
+    assets
+        .iter()
+        .map(|asset| AssetDelta {
+            path: asset.path.clone(),
+            blob_hash: Some(asset.blob_hash.clone()),
+        })
+        .collect()
+}
+
+async fn materialize_checkpoint_snapshot(
+    client: &reqwest::Client,
+    profile: &mut CliProfile,
+    snapshot: &CheckpointSnapshot,
+) -> Result<()> {
+    let workspace_root = std::env::current_dir()?;
+    let mut checked_out_assets = Vec::with_capacity(snapshot.assets.len());
+    for asset in &snapshot.assets {
+        let target = resolve_workspace_target(&workspace_root, &asset.path)?;
+        let bytes = fetch_blob_bytes(client, profile, &asset.blob_hash).await?;
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&target, &bytes)
+            .with_context(|| format!("failed to write {}", target.display()))?;
+        checked_out_assets.push(WorkspaceFile {
+            path: asset.path.clone(),
+            blob_hash: asset.blob_hash.clone(),
+        });
+    }
+    save_workspace(&WorkspaceState {
+        repo_id: snapshot.repo_id.clone(),
+        branch: snapshot.branch.clone(),
+        workspace_root: workspace_root.to_string_lossy().to_string(),
+        base_changeset_id: snapshot.base_changeset_id.clone(),
+        checked_out_assets,
+        last_synced_at: now_unix(),
+    })?;
+    let mut stage = StageFile::default_for_branch(&snapshot.branch);
+    stage.base_changeset_id = snapshot.base_changeset_id.clone();
+    save_stage(&stage)?;
+    Ok(())
+}
+
+fn resolve_workspace_target(workspace_root: &Path, asset_path: &str) -> Result<PathBuf> {
+    let normalized = asset_path.replace('/', &std::path::MAIN_SEPARATOR.to_string());
+    let candidate = PathBuf::from(&normalized);
+    if candidate.is_absolute() {
+        return Err(anyhow!(
+            "checkpoint asset path must be relative: {asset_path}"
+        ));
+    }
+    let has_parent = candidate
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir));
+    if has_parent {
+        return Err(anyhow!(
+            "checkpoint asset path escapes workspace: {asset_path}"
+        ));
+    }
+    let target = workspace_root.join(candidate);
+    if !_is_inside(&target, workspace_root) {
+        return Err(anyhow!(
+            "checkpoint asset path escapes workspace: {asset_path}"
+        ));
+    }
+    Ok(target)
 }
 
 async fn fetch_blob_bytes(
@@ -1718,6 +2281,21 @@ fn save_workspace(workspace: &WorkspaceState) -> Result<()> {
     Ok(())
 }
 
+fn load_session_state() -> Result<SessionState> {
+    let path = session_path()?;
+    let content =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    let session: SessionState = serde_json::from_str(&content)?;
+    Ok(session)
+}
+
+fn save_session_state(session: &SessionState) -> Result<()> {
+    ensure_state_dir()?;
+    let path = session_path()?;
+    fs::write(path, serde_json::to_vec_pretty(session)?)?;
+    Ok(())
+}
+
 fn ensure_state_dir() -> Result<()> {
     let dir = state_dir()?;
     if !dir.exists() {
@@ -1747,6 +2325,10 @@ fn workspace_path() -> Result<PathBuf> {
     Ok(state_dir()?.join("workspace.json"))
 }
 
+fn session_path() -> Result<PathBuf> {
+    Ok(state_dir()?.join("session.json"))
+}
+
 fn cache_dir() -> Result<PathBuf> {
     Ok(state_dir()?.join("cache").join("objects"))
 }
@@ -1771,6 +2353,7 @@ fn _is_inside(path: &Path, maybe_parent: &Path) -> bool {
 #[cfg(test)]
 mod cli_tests {
     use super::*;
+    use clap::CommandFactory;
 
     #[test]
     fn classify_status_prefers_staged_and_stale_base_signals() {
@@ -1798,5 +2381,58 @@ mod cli_tests {
             classify_asset_status(Some("base"), None, None, None, false),
             AssetStatusKind::Deleted
         );
+    }
+
+    #[test]
+    fn top_level_help_includes_session_checkpoint_commands() {
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("Save current workspace progress"));
+        assert!(help.contains("Create, restore, or branch from checkpoints"));
+    }
+
+    #[test]
+    fn submit_accepts_checkpoint_and_visibility_flags() {
+        let mut command = Cli::command();
+        let submit = command
+            .find_subcommand_mut("submit")
+            .expect("submit command")
+            .render_long_help()
+            .to_string();
+        assert!(submit.contains("--from-checkpoint"));
+        assert!(submit.contains("--visibility"));
+    }
+
+    #[test]
+    fn workspace_checkpoint_assets_hash_current_disk_files() {
+        let unique = now_unix();
+        let root = std::env::temp_dir().join(format!("hypertide-cli-save-{unique}"));
+        fs::create_dir_all(root.join("Assets")).expect("mkdir");
+        let asset_path = "Assets/a.txt";
+        fs::write(root.join(asset_path), b"changed").expect("write file");
+        let workspace = WorkspaceState {
+            repo_id: "repo-a".to_string(),
+            branch: "main".to_string(),
+            workspace_root: root.to_string_lossy().to_string(),
+            base_changeset_id: Some("ROOT".to_string()),
+            checked_out_assets: vec![WorkspaceFile {
+                path: asset_path.to_string(),
+                blob_hash: "old-hash".to_string(),
+            }],
+            last_synced_at: 0,
+        };
+
+        let assets = collect_workspace_checkpoint_assets(&workspace).expect("assets");
+
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0].blob_hash, hash_bytes(b"changed"));
+    }
+
+    #[test]
+    fn restore_target_rejects_paths_outside_workspace() {
+        let root = PathBuf::from("E:/workspace/game");
+
+        assert!(resolve_workspace_target(&root, "../outside.txt").is_err());
+        assert!(resolve_workspace_target(&root, "C:/outside.txt").is_err());
+        assert!(resolve_workspace_target(&root, "Assets/a.txt").is_ok());
     }
 }

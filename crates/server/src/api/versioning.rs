@@ -39,6 +39,13 @@ pub struct SubmitChangesetRequest {
     pub rollback_of: Option<String>,
     pub author: String,
     pub message: String,
+    pub intent_id: Option<String>,
+    pub task_id: Option<String>,
+    pub agent_run_id: Option<String>,
+    pub session_id: Option<String>,
+    pub parent_checkpoint_id: Option<String>,
+    pub risk_level: Option<String>,
+    pub semantic_summary: Option<String>,
     pub assets: Vec<AssetDelta>,
 }
 
@@ -269,7 +276,11 @@ pub async fn submit_changeset(
         Ok(kind) => kind,
         Err(message) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::err(message))),
     };
-    let visibility = match parse_visibility(payload.visibility.as_deref()) {
+    let visibility_value = payload
+        .visibility
+        .as_deref()
+        .or_else(|| payload.parent_checkpoint_id.as_ref().map(|_| "draft"));
+    let visibility = match parse_visibility(visibility_value) {
         Ok(visibility) => visibility,
         Err(message) => return (StatusCode::BAD_REQUEST, Json(ApiResponse::err(message))),
     };
@@ -281,10 +292,71 @@ pub async fn submit_changeset(
         );
     }
 
-    if let Err(err) = ensure_lock_access(&state, &identity.owner_id, &payload.assets) {
+    let mut assets = payload.assets;
+    let checkpoint_snapshot = if let Some(checkpoint_id) = payload.parent_checkpoint_id.as_deref() {
+        match state.session_manager.checkpoint_snapshot(checkpoint_id) {
+            Ok(snapshot) => {
+                let requested_branch = payload.branch.as_deref().unwrap_or("main");
+                if payload.repo_id != snapshot.repo_id || requested_branch != snapshot.branch {
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(ApiResponse::err(format!(
+                            "checkpoint lineage mismatch: checkpoint={}/{}, request={}/{}",
+                            snapshot.repo_id, snapshot.branch, payload.repo_id, requested_branch
+                        ))),
+                    );
+                }
+                if payload.base_changeset_id != snapshot.base_changeset_id {
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(ApiResponse::err(format!(
+                            "checkpoint base mismatch: checkpoint={:?}, request={:?}",
+                            snapshot.base_changeset_id, payload.base_changeset_id
+                        ))),
+                    );
+                }
+                Some(snapshot)
+            }
+            Err(error) => {
+                let (status, message) = match error {
+                    crate::core::session::SessionError::SessionNotFound { session_id } => (
+                        StatusCode::NOT_FOUND,
+                        format!("Session not found: {session_id}"),
+                    ),
+                    crate::core::session::SessionError::CheckpointNotFound { checkpoint_id } => (
+                        StatusCode::NOT_FOUND,
+                        format!("Checkpoint not found: {checkpoint_id}"),
+                    ),
+                    crate::core::session::SessionError::CheckpointExpired { checkpoint_id } => (
+                        StatusCode::CONFLICT,
+                        format!("Checkpoint expired: {checkpoint_id}"),
+                    ),
+                };
+                return (status, Json(ApiResponse::err(message)));
+            }
+        }
+    } else {
+        None
+    };
+    if assets.is_empty() {
+        if let Some(snapshot) = &checkpoint_snapshot {
+            assets = snapshot
+                .assets
+                .iter()
+                .map(|asset| AssetDelta {
+                    asset_id: Some(asset.asset_id.clone()),
+                    path: asset.path.clone(),
+                    from_blob_hash: None,
+                    blob_hash: Some(asset.blob_hash.clone()),
+                })
+                .collect();
+        }
+    }
+
+    if let Err(err) = ensure_lock_access(&state, &identity.owner_id, &assets) {
         return (err.0, Json(ApiResponse::err(err.1)));
     }
-    if let Err(err) = ensure_blob_exists(&state, &payload.assets).await {
+    if let Err(err) = ensure_blob_exists(&state, &assets).await {
         return (err.0, Json(ApiResponse::err(err.1)));
     }
 
@@ -297,7 +369,18 @@ pub async fn submit_changeset(
         author: payload.author,
         message: payload.message,
         visibility,
-        assets: payload.assets,
+        intent_id: payload.intent_id,
+        task_id: payload.task_id,
+        agent_run_id: payload.agent_run_id,
+        session_id: payload.session_id.or_else(|| {
+            checkpoint_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.session_id.clone())
+        }),
+        parent_checkpoint_id: payload.parent_checkpoint_id,
+        risk_level: payload.risk_level,
+        semantic_summary: payload.semantic_summary,
+        assets,
     };
 
     match state.version_manager.submit_changeset(input).await {
@@ -319,6 +402,11 @@ pub async fn submit_changeset(
                             "base_changeset_id": changeset.base_changeset_id,
                             "staging_ref": changeset.staging_ref,
                             "visible_ref": changeset.visible_ref,
+                            "intent_id": changeset.intent_id,
+                            "task_id": changeset.task_id,
+                            "agent_run_id": changeset.agent_run_id,
+                            "session_id": changeset.session_id,
+                            "parent_checkpoint_id": changeset.parent_checkpoint_id,
                         }),
                     )
                     .await
@@ -339,6 +427,11 @@ pub async fn submit_changeset(
                             "base_changeset_id": changeset.base_changeset_id,
                             "staging_ref": changeset.staging_ref,
                             "visible_ref": changeset.visible_ref,
+                            "intent_id": changeset.intent_id,
+                            "task_id": changeset.task_id,
+                            "agent_run_id": changeset.agent_run_id,
+                            "session_id": changeset.session_id,
+                            "parent_checkpoint_id": changeset.parent_checkpoint_id,
                         }),
                     )
                     .await
@@ -446,6 +539,13 @@ pub async fn rollback(
         author: payload.author,
         message,
         visibility: ChangesetVisibility::Visible,
+        intent_id: None,
+        task_id: None,
+        agent_run_id: None,
+        session_id: None,
+        parent_checkpoint_id: None,
+        risk_level: Some("high".to_string()),
+        semantic_summary: Some(format!("formal rollback to {}", plan.target_changeset_id)),
         assets: plan.assets.clone(),
     };
 

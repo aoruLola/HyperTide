@@ -46,6 +46,13 @@ struct ChangesetRow {
     promoted_at: Option<DateTime<Utc>>,
     staging_ref: Option<String>,
     visible_ref: Option<String>,
+    intent_id: Option<String>,
+    task_id: Option<String>,
+    agent_run_id: Option<String>,
+    session_id: Option<String>,
+    parent_checkpoint_id: Option<String>,
+    risk_level: Option<String>,
+    semantic_summary: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -132,7 +139,7 @@ impl VersionRepoPg {
             let changeset_rows = sqlx::query_as::<_, ChangesetRow>(
                 r#"
                 SELECT changeset_id, repo_id, branch_name, parent_changeset_id, base_changeset_id, kind, rollback_of, author, message, created_at, status, approved_by, approved_at, promoted_at
-                       , staging_ref, visible_ref
+                       , staging_ref, visible_ref, intent_id, task_id, agent_run_id, session_id, parent_checkpoint_id, risk_level, semantic_summary
                 FROM changesets
                 WHERE repo_id = $1
                 ORDER BY created_at ASC
@@ -162,6 +169,13 @@ impl VersionRepoPg {
                         promoted_at: row.promoted_at,
                         staging_ref: row.staging_ref,
                         visible_ref: row.visible_ref,
+                        intent_id: row.intent_id,
+                        task_id: row.task_id,
+                        agent_run_id: row.agent_run_id,
+                        session_id: row.session_id,
+                        parent_checkpoint_id: row.parent_checkpoint_id,
+                        risk_level: row.risk_level,
+                        semantic_summary: row.semantic_summary,
                         assets: Vec::new(),
                     },
                 );
@@ -280,9 +294,9 @@ impl VersionRepoPg {
             sqlx::query(
                 r#"
                 INSERT INTO changesets (
-                    changeset_id, repo_id, branch_name, parent_changeset_id, base_changeset_id, kind, rollback_of, author, message, created_at, status, approved_by, approved_at, promoted_at, staging_ref, visible_ref
+                    changeset_id, repo_id, branch_name, parent_changeset_id, base_changeset_id, kind, rollback_of, author, message, created_at, status, approved_by, approved_at, promoted_at, staging_ref, visible_ref, intent_id, task_id, agent_run_id, session_id, parent_checkpoint_id, risk_level, semantic_summary
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
                 "#,
             )
             .bind(&changeset.changeset_id)
@@ -301,6 +315,13 @@ impl VersionRepoPg {
             .bind(changeset.promoted_at)
             .bind(&changeset.staging_ref)
             .bind(&changeset.visible_ref)
+            .bind(&changeset.intent_id)
+            .bind(&changeset.task_id)
+            .bind(&changeset.agent_run_id)
+            .bind(&changeset.session_id)
+            .bind(&changeset.parent_checkpoint_id)
+            .bind(&changeset.risk_level)
+            .bind(&changeset.semantic_summary)
             .execute(&mut *tx)
             .await?;
 
