@@ -4,6 +4,7 @@ pub mod checkpoint;
 pub mod compliance;
 pub mod config;
 pub mod db;
+pub mod error;
 pub mod events;
 pub mod high_risk;
 pub mod lock;

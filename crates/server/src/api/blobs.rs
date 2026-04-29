@@ -98,8 +98,17 @@ pub async fn missing_chunks(
     } else {
         let mut missing = Vec::new();
         for hash in unique_hashes {
-            if !state.storage_manager.exists(&hash).await {
-                missing.push(hash);
+            match state.storage_manager.exists(&hash).await {
+                Ok(true) => {}
+                Ok(false) => missing.push(hash),
+                Err(error) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ApiResponse::err(format!(
+                            "failed to check chunk existence: {error}"
+                        ))),
+                    );
+                }
             }
         }
         missing
@@ -136,7 +145,17 @@ pub async fn upload_chunk(
         );
     }
 
-    let existed = state.storage_manager.exists(&chunk_hash).await;
+    let existed = match state.storage_manager.exists(&chunk_hash).await {
+        Ok(exists) => exists,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::err(format!(
+                    "failed to check chunk existence: {error}"
+                ))),
+            );
+        }
+    };
     let stored = match state
         .storage_manager
         .store(&body, &format!("chunk/{chunk_hash}"))
@@ -146,7 +165,7 @@ pub async fn upload_chunk(
         Err(error) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::err(error)),
+                Json(ApiResponse::err(error.to_string())),
             );
         }
     };

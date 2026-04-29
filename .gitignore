@@ -3,6 +3,8 @@
 /.tmp/
 /deploy/.env
 /deploy/keys/
+/deploy/server/.env
+/deploy/server/keys/
 /deploy/cli/dist/
 /storage/
 /tmp/
