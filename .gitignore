@@ -1,7 +1,9 @@
 /target
 /.worktrees
+/.tmp/
 /deploy/.env
 /deploy/keys/
+/deploy/cli/dist/
 /storage/
 /tmp/
 /.hypertide/

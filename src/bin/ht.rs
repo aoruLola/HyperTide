@@ -1,3 +1,5 @@
+// Legacy snapshot only. The maintained workspace CLI lives in crates/cli/src/main.rs.
+
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};

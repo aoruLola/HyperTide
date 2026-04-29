@@ -1,19 +1,27 @@
 use std::collections::HashSet;
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 use blake3::Hasher;
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgGroup, Args, Parser, Subcommand};
 use reqwest::{multipart, RequestBuilder, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 const ROOT_BASE_CHANGESET_ID: &str = "ROOT";
 const DIRECT_UPLOAD_THRESHOLD_BYTES: usize = 8 * 1024 * 1024;
+static NONCE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Parser)]
-#[command(name = "ht", version, about = "HyperTide CLI")]
+#[command(
+    name = "ht",
+    version,
+    about = "HyperTide CLI",
+    long_about = "HyperTide CLI for logging in, syncing assets, staging local changes, and submitting asset versions."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -21,35 +29,61 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    #[command(about = "Save server credentials and defaults")]
     Login(LoginArgs),
+    #[command(about = "Create, list, or switch branches")]
     Branch(BranchArgs),
+    #[command(about = "Stage a local file or existing blob")]
     Add(AddArgs),
+    #[command(about = "Stage an asset removal")]
     Remove(RemoveArgs),
     #[command(about = "Save current workspace progress")]
     Save(SaveArgs),
     #[command(about = "Create, restore, or branch from checkpoints")]
     Checkpoint(CheckpointArgs),
+    #[command(about = "Approve, promote, or inspect changesets")]
+    Changeset(ChangesetArgs),
+    #[command(about = "Acquire, release, renew, or inspect locks")]
+    Lock(LockArgs),
+    #[command(about = "Run trust, witness, audit, replay, and retention operations")]
+    Trust(TrustArgs),
+    #[command(about = "Submit staged asset changes")]
     Submit(SubmitArgs),
+    #[command(about = "Show changeset history")]
     Log(LogArgs),
+    #[command(about = "Submit a rollback changeset")]
     Rollback(RollbackArgs),
+    #[command(about = "Sync local metadata to a branch snapshot")]
     Sync(SyncArgs),
+    #[command(about = "Materialize branch assets into the workspace")]
     Checkout(CheckoutArgs),
+    #[command(about = "Show asset status for the workspace")]
     Status(StatusArgs),
+    #[command(about = "Show asset-level hash differences")]
     Diff(DiffArgs),
+    #[command(about = "Upload a large file through chunk storage")]
     ChunkUpload(ChunkUploadArgs),
 }
 
 #[derive(Debug, Args)]
 struct LoginArgs {
-    #[arg(long)]
+    #[arg(long, help = "HyperTide server URL")]
     server: String,
-    #[arg(long)]
+    #[arg(long, help = "API key or development token")]
     token: String,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Send the token directly as an API key instead of exchanging it for JWT tokens"
+    )]
     api_key_direct: bool,
-    #[arg(long)]
+    #[arg(long, help = "Default repository for later commands")]
     repo: Option<String>,
-    #[arg(long, default_value = "main")]
+    #[arg(
+        long,
+        default_value = "main",
+        help = "Default branch for later commands"
+    )]
     branch: String,
 }
 
@@ -61,64 +95,71 @@ struct BranchArgs {
 
 #[derive(Debug, Subcommand)]
 enum BranchCommand {
+    #[command(about = "Create a branch")]
     Create(BranchCreateArgs),
+    #[command(about = "List branches")]
     List(BranchListArgs),
+    #[command(about = "Switch the default branch")]
     Switch(BranchSwitchArgs),
 }
 
 #[derive(Debug, Args)]
 struct BranchCreateArgs {
-    #[arg(long)]
-    repo: String,
-    #[arg(long)]
+    #[arg(long, help = "Repository id; defaults to the login profile repository")]
+    repo: Option<String>,
+    #[arg(long, help = "Branch name to create")]
     name: String,
-    #[arg(long)]
+    #[arg(long, help = "Source changeset id for the new branch")]
     from: Option<String>,
 }
 
 #[derive(Debug, Args)]
 struct BranchListArgs {
-    #[arg(long)]
-    repo: String,
+    #[arg(long, help = "Repository id; defaults to the login profile repository")]
+    repo: Option<String>,
 }
 
 #[derive(Debug, Args)]
 struct BranchSwitchArgs {
-    #[arg(long)]
-    repo: String,
-    #[arg(long)]
+    #[arg(long, help = "Repository id; defaults to the login profile repository")]
+    repo: Option<String>,
+    #[arg(long, help = "Branch name to make current")]
     name: String,
 }
 
 #[derive(Debug, Args)]
+#[command(group(ArgGroup::new("input").required(true).args(["file", "blob"])))]
 struct AddArgs {
-    #[arg(long)]
+    #[arg(long, help = "Repository asset path", alias = "asset-path")]
     path: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Existing blob hash to stage",
+        requires = "path",
+        conflicts_with = "file"
+    )]
     blob: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Local file to upload and stage", conflicts_with = "blob")]
     file: Option<String>,
-    #[arg(long)]
-    asset_path: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Target branch; defaults to the login profile branch")]
     branch: Option<String>,
 }
 
 #[derive(Debug, Args)]
 struct RemoveArgs {
-    #[arg(long)]
-    asset_path: String,
-    #[arg(long)]
+    #[arg(long, help = "Repository asset path to remove", alias = "asset-path")]
+    path: String,
+    #[arg(long, help = "Target branch; defaults to the login profile branch")]
     branch: Option<String>,
 }
 
 #[derive(Debug, Args)]
 struct SubmitArgs {
-    #[arg(long)]
+    #[arg(long, help = "Repository id; defaults to the login profile repository")]
     repo: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Target branch; defaults to the login profile branch")]
     branch: Option<String>,
-    #[arg(long, default_value = "submit")]
+    #[arg(long, default_value = "submit", help = "Submit message")]
     message: String,
     #[arg(long)]
     visibility: Option<String>,
@@ -149,6 +190,7 @@ enum CheckpointCommand {
     Create(CheckpointCreateArgs),
     Restore(CheckpointRestoreArgs),
     Branch(CheckpointBranchArgs),
+    List(CheckpointListArgs),
 }
 
 #[derive(Debug, Args)]
@@ -178,74 +220,271 @@ struct CheckpointBranchArgs {
 }
 
 #[derive(Debug, Args)]
-struct LogArgs {
+struct CheckpointListArgs {
     #[arg(long)]
+    session: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct ChangesetArgs {
+    #[command(subcommand)]
+    command: ChangesetCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ChangesetCommand {
+    Approve(ChangesetActionArgs),
+    Promote(ChangesetPromoteArgs),
+    Gate(ChangesetActionArgs),
+}
+
+#[derive(Debug, Args)]
+struct ChangesetActionArgs {
+    #[arg(long, help = "Repository id; defaults to the login profile repository")]
     repo: Option<String>,
+    #[arg(long, help = "Changeset id")]
+    id: String,
+}
+
+#[derive(Debug, Args)]
+struct ChangesetPromoteArgs {
+    #[arg(long, help = "Repository id; defaults to the login profile repository")]
+    repo: Option<String>,
+    #[arg(long, help = "Changeset id")]
+    id: String,
+    #[arg(
+        long,
+        help = "High-risk signing secret; falls back to HT_HIGH_RISK_SIGNING_SECRET"
+    )]
+    high_risk_secret: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct LockArgs {
+    #[command(subcommand)]
+    command: LockCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum LockCommand {
+    Acquire(LockPathArgs),
+    Release(LockPathArgs),
+    Renew(LockPathArgs),
+    List,
+    ForceRelease(LockForceReleaseArgs),
+}
+
+#[derive(Debug, Args)]
+struct LockPathArgs {
+    #[arg(long, help = "Repository asset path to lock")]
+    path: String,
+}
+
+#[derive(Debug, Args)]
+struct LockForceReleaseArgs {
+    #[arg(long, help = "Repository asset path to force release")]
+    path: String,
+    #[arg(
+        long,
+        help = "High-risk signing secret; falls back to HT_HIGH_RISK_SIGNING_SECRET"
+    )]
+    high_risk_secret: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct TrustArgs {
+    #[command(subcommand)]
+    command: TrustCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum TrustCommand {
+    Checkpoint(TrustCheckpointArgs),
+    Witness(TrustWitnessArgs),
+    Audit(TrustAuditArgs),
+    Replay(TrustReplayArgs),
+    Retention(TrustRetentionArgs),
+}
+
+#[derive(Debug, Args)]
+struct TrustCheckpointArgs {
+    #[command(subcommand)]
+    command: TrustCheckpointCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum TrustCheckpointCommand {
+    Generate,
+    Latest,
+}
+
+#[derive(Debug, Args)]
+struct TrustWitnessArgs {
+    #[command(subcommand)]
+    command: TrustWitnessCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum TrustWitnessCommand {
+    Attest(TrustWitnessAttestArgs),
+    Summary(TrustWitnessSummaryArgs),
+    Topology,
+}
+
+#[derive(Debug, Args)]
+struct TrustWitnessAttestArgs {
+    #[arg(long, help = "Trust checkpoint id")]
+    checkpoint: String,
+    #[arg(long, help = "Witness id")]
+    witness: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct TrustWitnessSummaryArgs {
+    #[arg(long, help = "Trust checkpoint id")]
+    checkpoint: String,
+}
+
+#[derive(Debug, Args)]
+struct TrustAuditArgs {
+    #[command(subcommand)]
+    command: TrustAuditCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum TrustAuditCommand {
+    Verify,
+    Export(TrustAuditExportArgs),
+}
+
+#[derive(Debug, Args)]
+struct TrustAuditExportArgs {
     #[arg(long)]
+    limit: Option<i64>,
+    #[arg(long)]
+    before_seq: Option<i64>,
+    #[arg(long)]
+    action: Option<String>,
+    #[arg(long = "actor")]
+    actor_id: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct TrustReplayArgs {
+    #[command(subcommand)]
+    command: TrustReplayCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum TrustReplayCommand {
+    Verify,
+    Readiness,
+}
+
+#[derive(Debug, Args)]
+struct TrustRetentionArgs {
+    #[command(subcommand)]
+    command: TrustRetentionCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum TrustRetentionCommand {
+    Policy,
+}
+
+#[derive(Debug, Args)]
+struct LogArgs {
+    #[arg(long, help = "Repository id; defaults to the login profile repository")]
+    repo: Option<String>,
+    #[arg(long, help = "Branch to inspect; defaults to the login profile branch")]
     branch: Option<String>,
-    #[arg(long, default_value_t = 20)]
+    #[arg(
+        long,
+        default_value_t = 20,
+        help = "Maximum number of changesets to show"
+    )]
     limit: usize,
 }
 
 #[derive(Debug, Args)]
 struct RollbackArgs {
-    #[arg(long)]
+    #[arg(long, help = "Repository id; defaults to the login profile repository")]
     repo: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Target branch; defaults to the login profile branch")]
     branch: Option<String>,
-    #[arg(long = "to")]
+    #[arg(long = "to", help = "Changeset id to roll back to")]
     target_changeset_id: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Override rollback author; defaults to the authenticated owner"
+    )]
     author: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Rollback message")]
     message: Option<String>,
 }
 
 #[derive(Debug, Args)]
 struct SyncArgs {
-    #[arg(long)]
+    #[arg(long, help = "Repository id; defaults to the login profile repository")]
     repo: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Branch to sync; defaults to the login profile branch")]
     branch: Option<String>,
-    #[arg(long = "to")]
+    #[arg(long = "to", help = "Optional changeset id to sync to")]
     to_changeset_id: Option<String>,
 }
 
 #[derive(Debug, Args)]
 struct CheckoutArgs {
-    #[arg(long)]
+    #[arg(long, help = "Repository id; defaults to the login profile repository")]
     repo: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Branch to checkout; defaults to the login profile branch"
+    )]
     branch: Option<String>,
-    #[arg(long = "to")]
+    #[arg(long = "to", help = "Optional changeset id to checkout")]
     to_changeset_id: Option<String>,
 }
 
 #[derive(Debug, Args)]
 struct StatusArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Repository id; defaults to the workspace or login profile repository"
+    )]
     repo: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Branch to inspect; defaults to the workspace branch")]
     branch: Option<String>,
 }
 
 #[derive(Debug, Args)]
 struct DiffArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Repository id; defaults to the workspace or login profile repository"
+    )]
     repo: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Branch to inspect; defaults to the workspace branch")]
     branch: Option<String>,
 }
 
 #[derive(Debug, Args)]
 struct ChunkUploadArgs {
-    #[arg(long)]
+    #[arg(long, help = "Local file to upload through chunk storage")]
     file: String,
-    #[arg(long, default_value_t = 4 * 1024 * 1024)]
+    #[arg(long, default_value_t = 4 * 1024 * 1024, help = "Chunk size in bytes")]
     chunk_size: usize,
-    #[arg(long, default_value = "fixed-4m")]
+    #[arg(
+        long,
+        default_value = "fixed-4m",
+        help = "Chunk size policy recorded in the manifest"
+    )]
     chunk_size_policy: String,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Create only the manifest without composing a final blob"
+    )]
     manifest_only: bool,
 }
 
@@ -311,6 +550,16 @@ struct FileLockInfo {
     owner_id: String,
     locked_at: String,
     lease_expires_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct LockRequest<'a> {
+    file_path: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct AttestRequest<'a> {
+    witness_id: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -407,7 +656,28 @@ struct ChangesetRecord {
     author: String,
     message: String,
     created_at: String,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    staging_ref: Option<String>,
+    #[serde(default)]
+    visible_ref: Option<String>,
     assets: Vec<AssetDelta>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ChangesetGate {
+    repo_id: String,
+    changeset_id: String,
+    branch: String,
+    status: String,
+    required_state: String,
+    can_promote: bool,
+    blocking_reason: Option<String>,
+    base_changeset_id: Option<String>,
+    branch_head_changeset_id: Option<String>,
+    staging_ref: Option<String>,
+    visible_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -491,6 +761,27 @@ struct CheckpointAsset {
 #[derive(Debug, Deserialize)]
 struct SessionCheckpointRecord {
     checkpoint_id: String,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    repo_id: Option<String>,
+    #[serde(default)]
+    branch: Option<String>,
+    #[serde(default)]
+    base_changeset_id: Option<String>,
+    #[serde(default)]
+    trigger_reason: Option<String>,
+    #[serde(default)]
+    semantic_summary: Option<String>,
+    #[serde(default)]
+    expires_at: Option<String>,
+    #[serde(default)]
+    assets: Vec<CheckpointAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CheckpointPage {
+    items: Vec<SessionCheckpointRecord>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -563,6 +854,9 @@ async fn main() -> Result<()> {
         Command::Remove(args) => remove(args).await,
         Command::Save(args) => save_progress(args).await,
         Command::Checkpoint(args) => checkpoint(args).await,
+        Command::Changeset(args) => changeset(args).await,
+        Command::Lock(args) => lock(args).await,
+        Command::Trust(args) => trust(args).await,
         Command::Submit(args) => submit(args).await,
         Command::Log(args) => show_log(args).await,
         Command::Rollback(args) => rollback(args).await,
@@ -615,9 +909,10 @@ async fn branch(args: BranchArgs) -> Result<()> {
 
 async fn branch_create(args: BranchCreateArgs) -> Result<()> {
     let mut profile = load_profile()?;
+    let repo = resolve_repo(&profile, args.repo.as_deref())?;
     let client = reqwest::Client::new();
     let payload = CreateBranchRequest {
-        repo_id: &args.repo,
+        repo_id: &repo,
         branch: &args.name,
         from_changeset_id: args.from.as_deref(),
     };
@@ -641,11 +936,12 @@ async fn branch_create(args: BranchCreateArgs) -> Result<()> {
 
 async fn branch_list(args: BranchListArgs) -> Result<()> {
     let mut profile = load_profile()?;
+    let repo = resolve_repo(&profile, args.repo.as_deref())?;
     let client = reqwest::Client::new();
     let url = format!(
         "{}/v2/branches/{}",
         profile.server.trim_end_matches('/'),
-        args.repo
+        repo
     );
     let response: ApiResponse<BranchListResponse> = send_authed_api(
         &client,
@@ -675,11 +971,12 @@ async fn branch_list(args: BranchListArgs) -> Result<()> {
 
 async fn branch_switch(args: BranchSwitchArgs) -> Result<()> {
     let mut profile = load_profile()?;
+    let repo = resolve_repo(&profile, args.repo.as_deref())?;
     let client = reqwest::Client::new();
     let url = format!(
         "{}/v2/branches/{}",
         profile.server.trim_end_matches('/'),
-        args.repo
+        repo
     );
     let response: ApiResponse<BranchListResponse> = send_authed_api(
         &client,
@@ -698,7 +995,7 @@ async fn branch_switch(args: BranchSwitchArgs) -> Result<()> {
     if !data.branches.iter().any(|b| b.name == args.name) {
         return Err(anyhow!("branch not found: {}", args.name));
     }
-    profile.current_repo = Some(args.repo);
+    profile.current_repo = Some(repo);
     profile.current_branch = args.name.clone();
     save_profile(&profile)?;
 
@@ -720,7 +1017,10 @@ async fn add(args: AddArgs) -> Result<()> {
 
     match (args.file, args.path, args.blob) {
         (Some(file), None, None) => {
-            add_file(Path::new(&file), args.asset_path.as_deref(), &branch).await
+            add_file(Path::new(&file), None, &branch).await
+        }
+        (Some(file), Some(path), None) => {
+            add_file(Path::new(&file), Some(&path), &branch).await
         }
         (None, Some(path), Some(blob)) => {
             let mut stage = load_stage().unwrap_or_else(|_| StageFile::default_for_branch(&branch));
@@ -733,7 +1033,7 @@ async fn add(args: AddArgs) -> Result<()> {
             Ok(())
         }
         _ => Err(anyhow!(
-            "use either `ht add --path <repo-path> --blob <hash>` or `ht add --file <local-file> [--asset-path <repo-path>]`"
+            "use either `ht add --file <local-file> [--path <repo-path>]` or `ht add --path <repo-path> --blob <hash>`"
         )),
     }
 }
@@ -747,11 +1047,11 @@ async fn remove(args: RemoveArgs) -> Result<()> {
     if stage.branch != branch {
         stage = StageFile::default_for_branch(&branch);
     }
-    upsert_stage_asset(&mut stage, &args.asset_path, None);
+    upsert_stage_asset(&mut stage, &args.path, None);
     save_stage(&stage)?;
     println!(
         "staged delete for {} on {} ({} asset(s) staged)",
-        args.asset_path,
+        args.path,
         stage.branch,
         stage.assets.len()
     );
@@ -799,6 +1099,7 @@ async fn checkpoint(args: CheckpointArgs) -> Result<()> {
         CheckpointCommand::Create(cmd) => checkpoint_create(cmd).await,
         CheckpointCommand::Restore(cmd) => checkpoint_restore(cmd).await,
         CheckpointCommand::Branch(cmd) => checkpoint_branch(cmd).await,
+        CheckpointCommand::List(cmd) => checkpoint_list(cmd).await,
     }
 }
 
@@ -917,6 +1218,408 @@ async fn checkpoint_branch(args: CheckpointBranchArgs) -> Result<()> {
     Ok(())
 }
 
+async fn checkpoint_list(args: CheckpointListArgs) -> Result<()> {
+    let mut profile = load_profile()?;
+    let session_id = match args.session {
+        Some(session_id) => session_id,
+        None => load_session_state()?.current_session_id.ok_or_else(|| {
+            anyhow!("session not set. pass --session or create a checkpoint first")
+        })?,
+    };
+    let client = reqwest::Client::new();
+    let url = format!(
+        "{}/v2/sessions/{}/checkpoints",
+        profile.server.trim_end_matches('/'),
+        session_id
+    );
+    let response: ApiResponse<CheckpointPage> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| with_auth(client.get(&url), profile),
+        "checkpoint list response decode failed",
+    )
+    .await?;
+    if !response.success {
+        return Err(anyhow!(api_error_message(
+            &response,
+            "checkpoint list failed"
+        )));
+    }
+    let page = response.data.context("missing checkpoint page data")?;
+    for checkpoint in page.items {
+        println!(
+            "{}  session={} repo={} branch={} base={} assets={} reason={} summary={} expires_at={}",
+            checkpoint.checkpoint_id,
+            checkpoint.session_id.as_deref().unwrap_or(&session_id),
+            checkpoint.repo_id.as_deref().unwrap_or("<unknown>"),
+            checkpoint.branch.as_deref().unwrap_or("<unknown>"),
+            checkpoint
+                .base_changeset_id
+                .as_deref()
+                .unwrap_or(ROOT_BASE_CHANGESET_ID),
+            checkpoint.assets.len(),
+            checkpoint.trigger_reason.as_deref().unwrap_or("<none>"),
+            checkpoint.semantic_summary.as_deref().unwrap_or("<none>"),
+            checkpoint.expires_at.as_deref().unwrap_or("<none>")
+        );
+    }
+    Ok(())
+}
+
+async fn changeset(args: ChangesetArgs) -> Result<()> {
+    match args.command {
+        ChangesetCommand::Approve(cmd) => changeset_approve(cmd).await,
+        ChangesetCommand::Promote(cmd) => changeset_promote(cmd).await,
+        ChangesetCommand::Gate(cmd) => changeset_gate(cmd).await,
+    }
+}
+
+async fn changeset_approve(args: ChangesetActionArgs) -> Result<()> {
+    let mut profile = load_profile()?;
+    let repo = resolve_repo(&profile, args.repo.as_deref())?;
+    let client = reqwest::Client::new();
+    let url = format!(
+        "{}/v2/changesets/{}/approve?repo_id={}",
+        profile.server.trim_end_matches('/'),
+        args.id,
+        repo
+    );
+    let response: ApiResponse<ChangesetRecord> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| with_auth(client.post(&url), profile),
+        "changeset approve response decode failed",
+    )
+    .await?;
+    if !response.success {
+        return Err(anyhow!(api_error_message(
+            &response,
+            "changeset approve failed"
+        )));
+    }
+    let changeset = response.data.context("missing changeset response data")?;
+    print_changeset_action("approved", &changeset);
+    Ok(())
+}
+
+async fn changeset_promote(args: ChangesetPromoteArgs) -> Result<()> {
+    let mut profile = load_profile()?;
+    let repo = resolve_repo(&profile, args.repo.as_deref())?;
+    let client = reqwest::Client::new();
+    let actor_id = fetch_owner_id(&client, &profile).await?;
+    let payload = serde_json::json!({
+        "repo_id": repo,
+        "changeset_id": args.id,
+    });
+    let high_risk = build_high_risk_headers(
+        args.high_risk_secret.as_deref(),
+        "CHANGESET_PROMOTE",
+        &actor_id,
+        &payload,
+    );
+    let url = format!(
+        "{}/v2/changesets/{}/promote?repo_id={}",
+        profile.server.trim_end_matches('/'),
+        args.id,
+        repo
+    );
+    let response: ApiResponse<ChangesetRecord> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| {
+            let request = with_auth(client.post(&url), profile);
+            apply_high_risk_headers(request, high_risk.as_ref())
+        },
+        "changeset promote response decode failed",
+    )
+    .await?;
+    if !response.success {
+        return Err(anyhow!(api_error_message(
+            &response,
+            "changeset promote failed"
+        )));
+    }
+    let changeset = response.data.context("missing changeset response data")?;
+    print_changeset_action("promoted", &changeset);
+    Ok(())
+}
+
+async fn changeset_gate(args: ChangesetActionArgs) -> Result<()> {
+    let mut profile = load_profile()?;
+    let repo = resolve_repo(&profile, args.repo.as_deref())?;
+    let client = reqwest::Client::new();
+    let url = format!(
+        "{}/v2/changesets/{}/gate?repo_id={}",
+        profile.server.trim_end_matches('/'),
+        args.id,
+        repo
+    );
+    let response: ApiResponse<ChangesetGate> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| with_auth(client.get(&url), profile),
+        "changeset gate response decode failed",
+    )
+    .await?;
+    if !response.success {
+        return Err(anyhow!(api_error_message(
+            &response,
+            "changeset gate failed"
+        )));
+    }
+    let gate = response.data.context("missing gate response data")?;
+    println!(
+        "gate {} status={} required={} can_promote={} branch={} base={} head={} blocking={}",
+        gate.changeset_id,
+        gate.status,
+        gate.required_state,
+        gate.can_promote,
+        gate.branch,
+        gate.base_changeset_id
+            .as_deref()
+            .unwrap_or(ROOT_BASE_CHANGESET_ID),
+        gate.branch_head_changeset_id
+            .as_deref()
+            .unwrap_or(ROOT_BASE_CHANGESET_ID),
+        gate.blocking_reason.as_deref().unwrap_or("<none>")
+    );
+    Ok(())
+}
+
+async fn lock(args: LockArgs) -> Result<()> {
+    match args.command {
+        LockCommand::Acquire(cmd) => lock_acquire(cmd).await,
+        LockCommand::Release(cmd) => lock_release(cmd).await,
+        LockCommand::Renew(cmd) => lock_renew(cmd).await,
+        LockCommand::List => lock_list().await,
+        LockCommand::ForceRelease(cmd) => lock_force_release(cmd).await,
+    }
+}
+
+async fn lock_acquire(args: LockPathArgs) -> Result<()> {
+    let lock = send_lock_path_request("acquire", "/v2/locks/acquire", &args.path).await?;
+    print_lock("lock acquired", &lock);
+    Ok(())
+}
+
+async fn lock_release(args: LockPathArgs) -> Result<()> {
+    let mut profile = load_profile()?;
+    let client = reqwest::Client::new();
+    let payload = LockRequest {
+        file_path: &args.path,
+    };
+    let url = format!("{}/v2/locks/release", profile.server.trim_end_matches('/'));
+    let response: ApiResponse<()> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| with_auth(client.post(&url).json(&payload), profile),
+        "lock release response decode failed",
+    )
+    .await?;
+    if !response.success {
+        return Err(anyhow!(api_error_message(&response, "lock release failed")));
+    }
+    println!("lock released: {}", args.path);
+    Ok(())
+}
+
+async fn lock_renew(args: LockPathArgs) -> Result<()> {
+    let lock = send_lock_path_request("renew", "/v2/locks/renew", &args.path).await?;
+    print_lock("lock renewed", &lock);
+    Ok(())
+}
+
+async fn lock_list() -> Result<()> {
+    let mut profile = load_profile()?;
+    let client = reqwest::Client::new();
+    let locks = fetch_locks(&client, &mut profile).await?;
+    for lock in locks {
+        print_lock("lock", &lock);
+    }
+    Ok(())
+}
+
+async fn lock_force_release(args: LockForceReleaseArgs) -> Result<()> {
+    let mut profile = load_profile()?;
+    let client = reqwest::Client::new();
+    let payload = LockRequest {
+        file_path: &args.path,
+    };
+    let high_risk_payload = serde_json::json!({
+        "file_path": args.path,
+    });
+    let high_risk = build_high_risk_headers(
+        args.high_risk_secret.as_deref(),
+        "LOCK_FORCE_RELEASE",
+        "system-admin",
+        &high_risk_payload,
+    );
+    let url = format!(
+        "{}/v2/locks/force-release",
+        profile.server.trim_end_matches('/')
+    );
+    let response: ApiResponse<bool> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| {
+            let request = with_auth(client.post(&url).json(&payload), profile);
+            apply_high_risk_headers(request, high_risk.as_ref())
+        },
+        "lock force-release response decode failed",
+    )
+    .await?;
+    if !response.success {
+        return Err(anyhow!(api_error_message(
+            &response,
+            "lock force-release failed"
+        )));
+    }
+    println!("lock force-released: {}", args.path);
+    Ok(())
+}
+
+async fn send_lock_path_request(action: &str, endpoint: &str, path: &str) -> Result<FileLockInfo> {
+    let mut profile = load_profile()?;
+    let client = reqwest::Client::new();
+    let payload = LockRequest { file_path: path };
+    let url = format!("{}{}", profile.server.trim_end_matches('/'), endpoint);
+    let response: ApiResponse<FileLockInfo> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| with_auth(client.post(&url).json(&payload), profile),
+        "lock response decode failed",
+    )
+    .await?;
+    if !response.success {
+        return Err(anyhow!(api_error_message(
+            &response,
+            &format!("lock {action} failed")
+        )));
+    }
+    response.data.context("missing lock response data")
+}
+
+async fn trust(args: TrustArgs) -> Result<()> {
+    match args.command {
+        TrustCommand::Checkpoint(cmd) => trust_checkpoint(cmd).await,
+        TrustCommand::Witness(cmd) => trust_witness(cmd).await,
+        TrustCommand::Audit(cmd) => trust_audit(cmd).await,
+        TrustCommand::Replay(cmd) => trust_replay(cmd).await,
+        TrustCommand::Retention(cmd) => trust_retention(cmd).await,
+    }
+}
+
+async fn trust_checkpoint(args: TrustCheckpointArgs) -> Result<()> {
+    match args.command {
+        TrustCheckpointCommand::Generate => {
+            trust_json_post(
+                "/v2/trust/checkpoints/generate",
+                "trust checkpoint generate",
+            )
+            .await
+        }
+        TrustCheckpointCommand::Latest => {
+            trust_json_get("/v2/trust/checkpoints/latest", "trust checkpoint latest").await
+        }
+    }
+}
+
+async fn trust_witness(args: TrustWitnessArgs) -> Result<()> {
+    match args.command {
+        TrustWitnessCommand::Attest(cmd) => {
+            let mut profile = load_profile()?;
+            let client = reqwest::Client::new();
+            let payload = AttestRequest {
+                witness_id: cmd.witness.as_deref(),
+            };
+            let url = format!(
+                "{}/v2/trust/checkpoints/{}/witness/attest",
+                profile.server.trim_end_matches('/'),
+                cmd.checkpoint
+            );
+            let response: ApiResponse<serde_json::Value> = send_authed_api(
+                &client,
+                &mut profile,
+                |client, profile| with_auth(client.post(&url).json(&payload), profile),
+                "witness attest response decode failed",
+            )
+            .await?;
+            print_json_response(response, "witness attest failed")
+        }
+        TrustWitnessCommand::Summary(cmd) => {
+            let path = format!("/v2/trust/witness/summary?checkpoint_id={}", cmd.checkpoint);
+            trust_json_get(&path, "witness summary").await
+        }
+        TrustWitnessCommand::Topology => {
+            trust_json_get("/v2/trust/witness/topology", "witness topology").await
+        }
+    }
+}
+
+async fn trust_audit(args: TrustAuditArgs) -> Result<()> {
+    match args.command {
+        TrustAuditCommand::Verify => {
+            trust_json_post("/v2/trust/audit/verify", "audit verify").await
+        }
+        TrustAuditCommand::Export(cmd) => {
+            let mut path = "/v2/trust/audit/export".to_string();
+            let mut sep = '?';
+            push_query_param(&mut path, &mut sep, "limit", cmd.limit);
+            push_query_param(&mut path, &mut sep, "before_seq", cmd.before_seq);
+            push_query_param(&mut path, &mut sep, "action", cmd.action.as_deref());
+            push_query_param(&mut path, &mut sep, "actor_id", cmd.actor_id.as_deref());
+            trust_json_get(&path, "audit export").await
+        }
+    }
+}
+
+async fn trust_replay(args: TrustReplayArgs) -> Result<()> {
+    match args.command {
+        TrustReplayCommand::Verify => {
+            trust_json_post("/v2/trust/replay/verify", "replay verify").await
+        }
+        TrustReplayCommand::Readiness => {
+            trust_json_get("/v2/trust/replay/readiness", "replay readiness").await
+        }
+    }
+}
+
+async fn trust_retention(args: TrustRetentionArgs) -> Result<()> {
+    match args.command {
+        TrustRetentionCommand::Policy => {
+            trust_json_get("/v2/trust/retention/policy", "retention policy").await
+        }
+    }
+}
+
+async fn trust_json_get(path: &str, label: &str) -> Result<()> {
+    let mut profile = load_profile()?;
+    let client = reqwest::Client::new();
+    let url = format!("{}{}", profile.server.trim_end_matches('/'), path);
+    let response: ApiResponse<serde_json::Value> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| with_auth(client.get(&url), profile),
+        &format!("{label} response decode failed"),
+    )
+    .await?;
+    print_json_response(response, &format!("{label} failed"))
+}
+
+async fn trust_json_post(path: &str, label: &str) -> Result<()> {
+    let mut profile = load_profile()?;
+    let client = reqwest::Client::new();
+    let url = format!("{}{}", profile.server.trim_end_matches('/'), path);
+    let response: ApiResponse<serde_json::Value> = send_authed_api(
+        &client,
+        &mut profile,
+        |client, profile| with_auth(client.post(&url), profile),
+        &format!("{label} response decode failed"),
+    )
+    .await?;
+    print_json_response(response, &format!("{label} failed"))
+}
+
 async fn submit(args: SubmitArgs) -> Result<()> {
     let mut profile = load_profile()?;
     let repo = resolve_repo(&profile, args.repo.as_deref())?;
@@ -944,7 +1647,9 @@ async fn submit(args: SubmitArgs) -> Result<()> {
         checkpoint_assets
     };
     if submit_assets.is_empty() {
-        return Err(anyhow!("nothing staged; use `ht add --path --blob` first"));
+        return Err(anyhow!(
+            "nothing staged; use `ht add --file <local-file> [--path <repo-path>]` first"
+        ));
     }
 
     let base_hint = checkpoint_snapshot
@@ -1286,6 +1991,112 @@ async fn fetch_owner_id(client: &reqwest::Client, profile: &CliProfile) -> Resul
         return Err(anyhow!("api key is invalid"));
     }
     verify.owner_id.context("missing owner_id from verify")
+}
+
+#[derive(Debug, Clone)]
+struct HighRiskHeaders {
+    nonce: String,
+    timestamp: i64,
+    signature: String,
+}
+
+fn build_high_risk_headers(
+    explicit_secret: Option<&str>,
+    action: &str,
+    actor_id: &str,
+    payload: &serde_json::Value,
+) -> Option<HighRiskHeaders> {
+    let secret = explicit_secret
+        .map(str::to_string)
+        .or_else(|| env::var("HT_HIGH_RISK_SIGNING_SECRET").ok())?;
+    let nonce = next_nonce();
+    let timestamp = now_unix();
+    let signature = high_risk_signature(&secret, action, actor_id, &nonce, timestamp, payload);
+    Some(HighRiskHeaders {
+        nonce,
+        timestamp,
+        signature,
+    })
+}
+
+fn apply_high_risk_headers(
+    request: RequestBuilder,
+    headers: Option<&HighRiskHeaders>,
+) -> RequestBuilder {
+    let Some(headers) = headers else {
+        return request;
+    };
+    request
+        .header("X-HT-Nonce", &headers.nonce)
+        .header("X-HT-Timestamp", headers.timestamp.to_string())
+        .header("X-HT-Signature", &headers.signature)
+}
+
+fn high_risk_signature(
+    secret: &str,
+    action: &str,
+    actor_id: &str,
+    nonce: &str,
+    timestamp: i64,
+    payload: &serde_json::Value,
+) -> String {
+    let payload_hash = blake3::hash(
+        serde_json::to_string(payload)
+            .unwrap_or_default()
+            .as_bytes(),
+    )
+    .to_hex()
+    .to_string();
+    let material = format!("{secret}|{action}|{actor_id}|{nonce}|{timestamp}|{payload_hash}");
+    blake3::hash(material.as_bytes()).to_hex().to_string()
+}
+
+fn next_nonce() -> String {
+    let counter = NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{}-{counter}", now_unix(), std::process::id())
+}
+
+fn print_changeset_action(action: &str, changeset: &ChangesetRecord) {
+    println!(
+        "changeset {}: {} status={} branch={} staging_ref={} visible_ref={}",
+        action,
+        changeset.changeset_id,
+        changeset.status.as_deref().unwrap_or("<unknown>"),
+        changeset.branch,
+        changeset.staging_ref.as_deref().unwrap_or("<none>"),
+        changeset.visible_ref.as_deref().unwrap_or("<none>")
+    );
+}
+
+fn print_lock(label: &str, lock: &FileLockInfo) {
+    println!(
+        "{}: {} owner={} locked_at={} lease_expires_at={}",
+        label,
+        lock.file_path,
+        lock.owner_id,
+        lock.locked_at,
+        lock.lease_expires_at.as_deref().unwrap_or("<none>")
+    );
+}
+
+fn print_json_response(response: ApiResponse<serde_json::Value>, fallback: &str) -> Result<()> {
+    if !response.success {
+        return Err(anyhow!(api_error_message(&response, fallback)));
+    }
+    let data = response.data.context("missing response data")?;
+    println!("{}", serde_json::to_string_pretty(&data)?);
+    Ok(())
+}
+
+fn push_query_param<T: ToString>(path: &mut String, sep: &mut char, key: &str, value: Option<T>) {
+    let Some(value) = value else {
+        return;
+    };
+    path.push(*sep);
+    *sep = '&';
+    path.push_str(key);
+    path.push('=');
+    path.push_str(&value.to_string());
 }
 
 #[derive(Debug)]
@@ -2388,6 +3199,9 @@ mod cli_tests {
         let help = Cli::command().render_long_help().to_string();
         assert!(help.contains("Save current workspace progress"));
         assert!(help.contains("Create, restore, or branch from checkpoints"));
+        assert!(help.contains("Approve, promote, or inspect changesets"));
+        assert!(help.contains("Acquire, release, renew, or inspect locks"));
+        assert!(help.contains("Run trust, witness, audit, replay, and retention operations"));
     }
 
     #[test]
@@ -2400,6 +3214,133 @@ mod cli_tests {
             .to_string();
         assert!(submit.contains("--from-checkpoint"));
         assert!(submit.contains("--visibility"));
+    }
+
+    #[test]
+    fn changeset_commands_accept_required_flags() {
+        assert!(Cli::try_parse_from([
+            "ht",
+            "changeset",
+            "approve",
+            "--repo",
+            "repo-a",
+            "--id",
+            "cs-1",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "ht",
+            "changeset",
+            "promote",
+            "--repo",
+            "repo-a",
+            "--id",
+            "cs-1",
+            "--high-risk-secret",
+            "secret",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "ht",
+            "changeset",
+            "gate",
+            "--repo",
+            "repo-a",
+            "--id",
+            "cs-1",
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn checkpoint_list_accepts_optional_session() {
+        assert!(Cli::try_parse_from(["ht", "checkpoint", "list"]).is_ok());
+        assert!(Cli::try_parse_from(["ht", "checkpoint", "list", "--session", "sess-1"]).is_ok());
+    }
+
+    #[test]
+    fn lock_commands_accept_paths_and_high_risk_secret() {
+        assert!(
+            Cli::try_parse_from(["ht", "lock", "acquire", "--path", "Content/a.uasset"]).is_ok()
+        );
+        assert!(
+            Cli::try_parse_from(["ht", "lock", "release", "--path", "Content/a.uasset"]).is_ok()
+        );
+        assert!(Cli::try_parse_from(["ht", "lock", "renew", "--path", "Content/a.uasset"]).is_ok());
+        assert!(Cli::try_parse_from(["ht", "lock", "list"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "ht",
+            "lock",
+            "force-release",
+            "--path",
+            "Content/a.uasset",
+            "--high-risk-secret",
+            "secret",
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn trust_commands_accept_governance_arguments() {
+        assert!(Cli::try_parse_from(["ht", "trust", "checkpoint", "generate"]).is_ok());
+        assert!(Cli::try_parse_from(["ht", "trust", "checkpoint", "latest"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "ht",
+            "trust",
+            "witness",
+            "attest",
+            "--checkpoint",
+            "tc-1",
+            "--witness",
+            "witness-a",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from(
+            ["ht", "trust", "witness", "summary", "--checkpoint", "tc-1",]
+        )
+        .is_ok());
+        assert!(Cli::try_parse_from(["ht", "trust", "witness", "topology"]).is_ok());
+        assert!(Cli::try_parse_from(["ht", "trust", "audit", "verify"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "ht",
+            "trust",
+            "audit",
+            "export",
+            "--limit",
+            "10",
+            "--before-seq",
+            "99",
+            "--action",
+            "CHANGESET_PROMOTED",
+            "--actor",
+            "alice",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from(["ht", "trust", "replay", "verify"]).is_ok());
+        assert!(Cli::try_parse_from(["ht", "trust", "replay", "readiness"]).is_ok());
+        assert!(Cli::try_parse_from(["ht", "trust", "retention", "policy"]).is_ok());
+    }
+
+    #[test]
+    fn high_risk_signature_is_stable_for_fixed_inputs() {
+        let payload = serde_json::json!({
+            "repo_id": "repo-a",
+            "changeset_id": "cs-1",
+        });
+
+        let signature = high_risk_signature(
+            "secret",
+            "CHANGESET_PROMOTE",
+            "alice",
+            "nonce-1",
+            1_700_000_000,
+            &payload,
+        );
+
+        assert_eq!(
+            signature,
+            "a52cc938a612b8115516cdb7afc42e40eb7edae89ca98778fdeea92ee232c301"
+        );
     }
 
     #[test]
@@ -2434,5 +3375,52 @@ mod cli_tests {
         assert!(resolve_workspace_target(&root, "../outside.txt").is_err());
         assert!(resolve_workspace_target(&root, "C:/outside.txt").is_err());
         assert!(resolve_workspace_target(&root, "Assets/a.txt").is_ok());
+    }
+
+    #[test]
+    fn add_without_input_fails_at_argument_validation() {
+        let error = Cli::try_parse_from(["ht", "add"]).unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains("--file <FILE>"));
+        assert!(message.contains("--blob <BLOB>"));
+    }
+
+    #[test]
+    fn branch_commands_accept_repo_from_profile_default() {
+        assert!(Cli::try_parse_from(["ht", "branch", "create", "--name", "feature/test"]).is_ok());
+        assert!(Cli::try_parse_from(["ht", "branch", "list"]).is_ok());
+        assert!(Cli::try_parse_from(["ht", "branch", "switch", "--name", "main"]).is_ok());
+    }
+
+    #[test]
+    fn path_aliases_preserve_asset_path_compatibility() {
+        assert!(Cli::try_parse_from([
+            "ht",
+            "add",
+            "--file",
+            "tree.uasset",
+            "--path",
+            "Content/tree.uasset",
+        ])
+        .is_ok());
+        assert!(
+            Cli::try_parse_from(["ht", "remove", "--asset-path", "Content/tree.uasset",]).is_ok()
+        );
+    }
+
+    #[test]
+    fn help_text_explains_core_commands_and_path_arguments() {
+        let top_help = Cli::command().render_long_help().to_string();
+        assert!(top_help.contains("Save server credentials and defaults"));
+        assert!(top_help.contains("Stage a local file or existing blob"));
+
+        let mut command = Cli::command();
+        let add = command
+            .find_subcommand_mut("add")
+            .expect("add subcommand exists");
+        let add_help = add.render_long_help().to_string();
+        assert!(add_help.contains("Local file to upload and stage"));
+        assert!(add_help.contains("Repository asset path"));
     }
 }
