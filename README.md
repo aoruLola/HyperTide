@@ -323,4 +323,4 @@ Minimum expectations:
 
 Security-sensitive findings should follow the private reporting path in [SECURITY.md](SECURITY.md) and should not be disclosed publicly.
 
-This repository is in commercial incubation and is temporarily public for review purposes; see [LICENSE.md](LICENSE.md) for license terms. Except for the limited review access expressly allowed there, no open source use, redistribution, or external publication rights are granted.
+This project is licensed under the [MIT License](LICENSE).

@@ -4,7 +4,7 @@
 
 HyperTide 是一个面向大型二进制资产工作流的中心化协作与版本系统。它把版本真相、分支状态、锁、审批、审计和回放能力放在服务端，由 CLI 和后续 UI 提供面向工作区的操作体验。
 
-> 本仓库是 HyperTide 商业孵化阶段的主代码库，目前为审核目的临时公开。公开可见不代表开源发布；除 [LICENSE.md](LICENSE.md) 中列出的有限审核许可外，保留所有权利。
+> 本项目基于 [MIT 许可证](LICENSE) 开源。
 
 ## 目录
 
@@ -323,4 +323,4 @@ powershell -ExecutionPolicy Bypass -File .\deploy\server\smoke.ps1
 
 安全敏感问题应按 [SECURITY.md](SECURITY.md) 中的私有报告路径处理，不应公开披露。
 
-仓库当前处于商业孵化阶段，并为审核目的临时公开；许可条款见 [LICENSE.md](LICENSE.md)。除该文件明确允许的有限审核访问外，未授权开源使用、再发布或外部分发。
+本项目基于 [MIT 许可证](LICENSE) 开源。

@@ -27,6 +27,18 @@ base64.workspace = true
 reqwest.workspace = true
 sqlx.workspace = true
 jsonwebtoken.workspace = true
+async-trait.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+# Enterprise (optional, behind feature flag)
+hypertide-attestation = { git = "https://github.com/openLYURA/hypertide-enterprise.git", optional = true }
+hypertide-enterprise-auth = { git = "https://github.com/openLYURA/hypertide-enterprise.git", optional = true }
+hypertide-compliance = { git = "https://github.com/openLYURA/hypertide-enterprise.git", optional = true }
+
+[features]
+enterprise = ["hypertide-attestation", "hypertide-enterprise-auth", "hypertide-compliance"]
 
 [dev-dependencies]
 tower.workspace = true

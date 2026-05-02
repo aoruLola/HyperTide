@@ -11,5 +11,6 @@ pub mod lock;
 pub mod replay;
 pub mod session;
 pub mod storage;
+pub mod storage_backend;
 pub mod versioning;
 pub mod witness;

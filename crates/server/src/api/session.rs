@@ -66,6 +66,7 @@ pub async fn create_session(
         Ok(identity) => identity,
         Err((status, message)) => return (status, Json(ApiResponse::err(message))),
     };
+    let event_meta = crate::core::events::EventMetadata::from_headers(&headers);
 
     let record = state.session_manager.create_session(CreateSessionInput {
         repo_id: payload.repo_id,
@@ -97,6 +98,7 @@ pub async fn create_session(
                     "task_id": record.task_id,
                     "agent_run_id": record.agent_run_id,
                 }),
+                &event_meta,
             )
             .await
         {
@@ -150,6 +152,7 @@ async fn create_checkpoint_with_reason(
         Ok(identity) => identity,
         Err((status, message)) => return (status, Json(ApiResponse::err(message))),
     };
+    let event_meta = crate::core::events::EventMetadata::from_headers(&headers);
 
     let trigger_reason = payload
         .trigger_reason
@@ -187,6 +190,7 @@ async fn create_checkpoint_with_reason(
                     "trigger_reason": checkpoint.trigger_reason,
                     "asset_count": checkpoint.assets.len(),
                 }),
+                &event_meta,
             )
             .await
         {

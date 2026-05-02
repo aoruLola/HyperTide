@@ -62,7 +62,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -73,7 +73,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -303,6 +303,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "clap_complete"
+version = "4.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "660c0520455b1013b9bcb0393d5f643d7e4454fb69c915b8d6d2aa0e9a45acc3"
+dependencies = [
+ "clap",
+]
+
+[[package]]
 name = "clap_derive"
 version = "4.5.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -496,7 +505,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -848,12 +857,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "hypertide-attestation"
+version = "0.1.0"
+source = "git+https://github.com/openLYURA/hypertide-enterprise.git#c6585e133b9601dc8ee63364221ff70875365d18"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "chrono",
+ "hex",
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "hypertide-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake3",
  "clap",
+ "clap_complete",
  "reqwest",
  "serde",
  "serde_json",
@@ -861,10 +888,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "hypertide-compliance"
+version = "0.1.0"
+source = "git+https://github.com/openLYURA/hypertide-enterprise.git#c6585e133b9601dc8ee63364221ff70875365d18"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "hypertide-enterprise-auth"
+version = "0.1.0"
+source = "git+https://github.com/openLYURA/hypertide-enterprise.git#c6585e133b9601dc8ee63364221ff70875365d18"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "hypertide-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "base64",
  "blake3",
@@ -872,10 +927,16 @@ dependencies = [
  "clap",
  "dashmap",
  "dotenvy",
+ "hex",
+ "hmac",
+ "hypertide-attestation",
+ "hypertide-compliance",
+ "hypertide-enterprise-auth",
  "jsonwebtoken",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "tokio",
  "tower",
@@ -1224,7 +1285,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

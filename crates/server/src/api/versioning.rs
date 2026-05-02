@@ -280,6 +280,7 @@ pub async fn submit_changeset(
         Ok(key) => key,
         Err((status, message)) => return (status, Json(ApiResponse::err(message))),
     };
+    let event_meta = crate::core::events::EventMetadata::from_headers(&headers);
 
     let kind = match parse_kind(payload.kind.as_deref()) {
         Ok(kind) => kind,
@@ -417,6 +418,7 @@ pub async fn submit_changeset(
                             "session_id": changeset.session_id,
                             "parent_checkpoint_id": changeset.parent_checkpoint_id,
                         }),
+                        &event_meta,
                     )
                     .await
                 {
@@ -493,6 +495,7 @@ pub async fn rollback(
         Ok(key) => key,
         Err((status, message)) => return (status, Json(ApiResponse::err(message))),
     };
+    let event_meta = crate::core::events::EventMetadata::from_headers(&headers);
     if payload.author != identity.owner_id {
         return (
             StatusCode::FORBIDDEN,
@@ -571,6 +574,7 @@ pub async fn rollback(
                             "branch": changeset.branch,
                             "target_changeset_id": plan.target_changeset_id,
                         }),
+                        &event_meta,
                     )
                     .await
                 {
@@ -624,6 +628,7 @@ pub async fn approve_changeset(
         Ok(key) => key,
         Err((status, message)) => return (status, Json(ApiResponse::err(message))),
     };
+    let event_meta = crate::core::events::EventMetadata::from_headers(&headers);
 
     match state
         .version_manager
@@ -644,6 +649,7 @@ pub async fn approve_changeset(
                             "staging_ref": changeset.staging_ref,
                             "visible_ref": changeset.visible_ref,
                         }),
+                        &event_meta,
                     )
                     .await
                 {
@@ -689,6 +695,7 @@ pub async fn promote_changeset(
         Ok(key) => key,
         Err((status, message)) => return (status, Json(ApiResponse::err(message))),
     };
+    let event_meta = crate::core::events::EventMetadata::from_headers(&headers);
     if let Some(guard) = &state.high_risk_guard {
         if let Err(message) = guard
             .verify(
@@ -726,6 +733,7 @@ pub async fn promote_changeset(
                             "staging_ref": changeset.staging_ref,
                             "visible_ref": changeset.visible_ref,
                         }),
+                        &event_meta,
                     )
                     .await
                 {

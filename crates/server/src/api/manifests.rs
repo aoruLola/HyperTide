@@ -156,6 +156,7 @@ pub async fn create_manifest(
     if let Err((status, message)) = require_upload_permission(&state, &headers).await {
         return (status, Json(ApiResponse::err(message)));
     }
+    let event_meta = crate::core::events::EventMetadata::from_headers(&headers);
 
     if payload.chunks.is_empty() {
         return (
@@ -342,6 +343,7 @@ pub async fn create_manifest(
                             "chunk_size_policy": canonical.chunk_size_policy,
                             "created": created,
                         }),
+                        &event_meta,
                     )
                     .await
                 {

@@ -16,6 +16,14 @@ pub struct FileLock {
     pub owner_id: String,
     pub locked_at: DateTime<Utc>,
     pub lease_expires_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub repo_id: String,
+    #[serde(default = "default_scope")]
+    pub scope: String,
+}
+
+fn default_scope() -> String {
+    "asset".to_string()
 }
 
 #[derive(Clone)]
@@ -60,11 +68,24 @@ impl LockManager {
         file_path: String,
         owner_id: String,
     ) -> Result<FileLock, HyperTideError> {
+        self.try_lock_with_repo(file_path, owner_id, "", "asset").await
+    }
+
+    /// Attempt to lock a file with repo_id and scope context.
+    pub async fn try_lock_with_repo(
+        &self,
+        file_path: String,
+        owner_id: String,
+        repo_id: &str,
+        scope: &str,
+    ) -> Result<FileLock, HyperTideError> {
         let requested_lock = FileLock {
             file_path: file_path.clone(),
             owner_id: owner_id.clone(),
             locked_at: Utc::now(),
             lease_expires_at: Some(self.next_lease_expiry()),
+            repo_id: repo_id.to_string(),
+            scope: scope.to_string(),
         };
 
         if let Some(repo) = &self.repo {

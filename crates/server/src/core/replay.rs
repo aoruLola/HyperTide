@@ -49,6 +49,7 @@ pub struct ReplayService {
 
 #[derive(Debug, sqlx::FromRow)]
 struct EventRow {
+    event_id: i64,
     event_type: String,
     payload: Value,
     repo_id: Option<String>,
@@ -151,13 +152,61 @@ impl ReplayService {
     }
 
     pub async fn verify(&self) -> Result<ReplayVerification, sqlx::Error> {
+        self.verify_incremental(None).await
+    }
+
+    /// Save a replay checkpoint marking the current event sequence position.
+    pub async fn save_checkpoint(&self, checkpoint_id: &str) -> Result<(), sqlx::Error> {
+        let max_seq: Option<i64> =
+            sqlx::query_scalar("SELECT MAX(event_id) FROM event_store")
+                .fetch_one(&self.pool)
+                .await?;
+        let event_seq = max_seq.unwrap_or(0);
+        sqlx::query(
+            r#"
+            INSERT INTO replay_checkpoints (checkpoint_id, event_seq)
+            VALUES ($1, $2)
+            ON CONFLICT (checkpoint_id) DO UPDATE SET event_seq = EXCLUDED.event_seq
+            "#,
+        )
+        .bind(checkpoint_id)
+        .bind(event_seq)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Verify replay from an optional checkpoint. If `from_checkpoint` is None, does a full scan.
+    pub async fn verify_incremental(
+        &self,
+        from_checkpoint: Option<&str>,
+    ) -> Result<ReplayVerification, sqlx::Error> {
+        let start_seq = if let Some(cp_id) = from_checkpoint {
+            let seq: Option<i64> = sqlx::query_scalar(
+                "SELECT event_seq FROM replay_checkpoints WHERE checkpoint_id = $1",
+            )
+            .bind(cp_id)
+            .fetch_optional(&self.pool)
+            .await?;
+            match seq {
+                Some(s) => s,
+                None => {
+                    return Err(sqlx::Error::RowNotFound);
+                }
+            }
+        } else {
+            0
+        };
+
         let events = sqlx::query_as::<_, EventRow>(
             r#"
-            SELECT event_type, payload, repo_id, changeset_id
+            SELECT event_id, event_type, payload, repo_id, changeset_id
             FROM event_store
+            WHERE event_id > $1
             ORDER BY event_id ASC
             "#,
         )
+        .bind(start_seq)
         .fetch_all(&self.pool)
         .await?;
 

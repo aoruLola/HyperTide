@@ -45,6 +45,7 @@ pub async fn upload_file(
     if let Err((status, message)) = require_permission(&state, &headers, Permission::Upload).await {
         return (status, Json(ApiResponse::err(message)));
     }
+    let event_meta = crate::core::events::EventMetadata::from_headers(&headers);
 
     // Get the first file field
     let field = match multipart.next_field().await {
@@ -89,6 +90,7 @@ pub async fn upload_file(
                             "size_bytes": stored.size_bytes,
                             "original_path": stored.original_path,
                         }),
+                        &event_meta,
                     )
                     .await
                 {

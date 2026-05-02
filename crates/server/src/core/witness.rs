@@ -176,9 +176,16 @@ impl WitnessService {
             checkpoint.log_size,
             checkpoint.state_root
         );
-        let signature = blake3::hash(format!("{}|{}", witness.secret, material).as_bytes())
-            .to_hex()
-            .to_string();
+        let signature = {
+            use hmac::{Hmac, Mac};
+            use sha2::Sha256;
+            type HmacSha256 = Hmac<Sha256>;
+
+            let mut mac = HmacSha256::new_from_slice(witness.secret.as_bytes())
+                .expect("HMAC accepts any key length");
+            mac.update(material.as_bytes());
+            hex::encode(mac.finalize().into_bytes())
+        };
         let created_at = Utc::now();
 
         sqlx::query(

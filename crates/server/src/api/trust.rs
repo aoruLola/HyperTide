@@ -174,9 +174,15 @@ pub async fn verify_audit_chain(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ReplayQuery {
+    pub from_checkpoint: Option<String>,
+}
+
 pub async fn verify_replay(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<ReplayQuery>,
 ) -> (StatusCode, Json<ApiResponse<ReplayVerification>>) {
     if let Err((status, message)) = require_permission(&state, &headers, Permission::Admin).await {
         return (status, Json(ApiResponse::err(message)));
@@ -189,7 +195,10 @@ pub async fn verify_replay(
         );
     };
 
-    match replay_service.verify().await {
+    match replay_service
+        .verify_incremental(query.from_checkpoint.as_deref())
+        .await
+    {
         Ok(result) => (StatusCode::OK, Json(ApiResponse::ok(result))),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,

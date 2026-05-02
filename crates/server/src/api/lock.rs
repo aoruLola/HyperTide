@@ -73,6 +73,8 @@ pub async fn lock_file(
         Err((status, message)) => return (status, Json(ApiResponse::err(message))),
     };
 
+    let event_meta = crate::core::events::EventMetadata::from_headers(&headers);
+
     match state
         .lock_manager
         .try_lock(payload.file_path, owner_id)
@@ -87,6 +89,7 @@ pub async fn lock_file(
                         None,
                         None,
                         json!({ "file_path": lock.file_path, "lease_expires_at": lock.lease_expires_at }),
+                        &event_meta,
                     )
                     .await
                 {
@@ -118,6 +121,8 @@ pub async fn unlock_file(
         Err((status, message)) => return (status, Json(ApiResponse::err(message))),
     };
 
+    let event_meta = crate::core::events::EventMetadata::from_headers(&headers);
+
     match state
         .lock_manager
         .unlock(&payload.file_path, &owner_id)
@@ -132,6 +137,7 @@ pub async fn unlock_file(
                         None,
                         None,
                         json!({ "file_path": payload.file_path }),
+                        &event_meta,
                     )
                     .await
                 {
@@ -163,6 +169,8 @@ pub async fn renew_lock_file(
         Err((status, message)) => return (status, Json(ApiResponse::err(message))),
     };
 
+    let event_meta = crate::core::events::EventMetadata::from_headers(&headers);
+
     match state
         .lock_manager
         .renew_lock(&payload.file_path, &owner_id)
@@ -177,6 +185,7 @@ pub async fn renew_lock_file(
                         None,
                         None,
                         json!({ "file_path": payload.file_path, "lease_expires_at": lock.lease_expires_at }),
+                        &event_meta,
                     )
                     .await
                 {
@@ -216,6 +225,8 @@ pub async fn force_unlock_file(
         }
     }
 
+    let event_meta = crate::core::events::EventMetadata::from_headers(&headers);
+
     match state.lock_manager.force_unlock(&payload.file_path).await {
         Ok(true) => {
             if let Some(event_store) = &state.event_store {
@@ -226,6 +237,7 @@ pub async fn force_unlock_file(
                         None,
                         None,
                         json!({ "file_path": payload.file_path }),
+                        &event_meta,
                     )
                     .await
                 {
