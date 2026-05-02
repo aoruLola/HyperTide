@@ -1,4 +1,0 @@
-interface:
-  display_name: "HyperTide Workspace Flow"
-  short_description: "Inspect and refresh HyperTide workspace state safely"
-  default_prompt: "Use $hypertide-workspace-flow to inspect a HyperTide workspace with sync, checkout, status, and diff before any write action."

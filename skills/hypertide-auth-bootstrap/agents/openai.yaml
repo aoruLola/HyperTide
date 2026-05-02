@@ -1,4 +1,0 @@
-interface:
-  display_name: "HyperTide Auth Bootstrap"
-  short_description: "Establish HyperTide login and repo or branch context safely"
-  default_prompt: "Use $hypertide-auth-bootstrap to establish HyperTide CLI authentication and active repo or branch context before any other workflow."
