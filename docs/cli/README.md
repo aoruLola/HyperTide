@@ -100,7 +100,7 @@ cargo run -p hypertide-cli --bin ht -- checkout --repo demo-repo --branch main
 ```powershell
 cargo run -p hypertide-cli --bin ht -- add `
   --file .\Content\Props\tree.uasset `
-  --path Content/Props/tree.uasset `
+  --asset-path Content/Props/tree.uasset `
   --branch main
 ```
 
@@ -110,7 +110,7 @@ CLI 会自动读取文件、上传内容、拿到最终 `blob_hash`，并写入 
 
 ```powershell
 cargo run -p hypertide-cli --bin ht -- add `
-  --path Content/Props/tree.uasset `
+  --asset-path Content/Props/tree.uasset `
   --blob <blob-hash> `
   --branch main
 ```
@@ -234,7 +234,7 @@ cargo run -p hypertide-cli --bin ht -- branch list --repo demo-repo
 ### 删除一个资产
 
 ```powershell
-cargo run -p hypertide-cli --bin ht -- remove --path Content/Props/old-tree.uasset --branch main
+cargo run -p hypertide-cli --bin ht -- remove --asset-path Content/Props/old-tree.uasset --branch main
 ```
 
 删除会先写入 stage；真正的版本删除发生在 `submit` 时。
@@ -349,22 +349,20 @@ cargo run -p hypertide-cli --bin ht -- branch switch --repo demo-repo --name mai
 ### `add`
 
 ```powershell
-cargo run -p hypertide-cli --bin ht -- add --file .\asset.bin --path Content/asset.bin --branch main
+cargo run -p hypertide-cli --bin ht -- add --file .\asset.bin --asset-path Content/asset.bin --branch main
 ```
 
 或：
 
 ```powershell
-cargo run -p hypertide-cli --bin ht -- add --path Content/asset.bin --blob <blob-hash> --branch main
+cargo run -p hypertide-cli --bin ht -- add --asset-path Content/asset.bin --blob <blob-hash> --branch main
 ```
 
 ### `remove`
 
 ```powershell
-cargo run -p hypertide-cli --bin ht -- remove --path Content/asset.bin --branch main
+cargo run -p hypertide-cli --bin ht -- remove --asset-path Content/asset.bin --branch main
 ```
-
-兼容说明：旧参数名 `--asset-path` 仍可作为 `--path` 的别名使用，但新文档和帮助页统一使用 `--path`。
 
 ### `sync`
 
@@ -431,6 +429,10 @@ JWT 模式下，CLI 会自动刷新。如果 refresh token 已失效，请重新
 ### 提交时报 `stale base`
 
 说明本地 `base_changeset_id` 已落后于当前分支 head。先执行 `sync` 或 `checkout`，确认最新基线后再重新暂存并提交。
+
+### 提交时报 `nothing staged`
+
+说明当前 `stage.json` 为空。先执行 `ht add --file <local-file> [--asset-path <repo-path>]` 暂存至少一个资产。
 
 ### 为什么没有 merge / rebase / 本地 commit
 

@@ -43,9 +43,15 @@ enum Command {
     Login(LoginArgs),
     #[command(about = "Create, list, or switch branches")]
     Branch(BranchArgs),
-    #[command(about = "Stage a local file or existing blob")]
+    #[command(
+        about = "Stage a local file or existing blob",
+        long_about = "Stage a file for the next submit.\n\n  ht add --file <local-file> [--asset-path <repo-path>]\n    Upload the local file and stage it under the given repo path.\n    If --asset-path is omitted the local file name is used.\n\n  ht add --blob <hash> --asset-path <repo-path>\n    Stage an already-uploaded blob by its hash."
+    )]
     Add(AddArgs),
-    #[command(about = "Stage an asset removal")]
+    #[command(
+        about = "Stage an asset removal",
+        long_about = "Mark an asset for removal in the next submit.\n\n  ht remove --asset-path <repo-path>"
+    )]
     Remove(RemoveArgs),
     #[command(about = "Save current workspace progress")]
     Save(SaveArgs),
@@ -140,16 +146,20 @@ struct BranchSwitchArgs {
 #[derive(Debug, Args)]
 #[command(group(ArgGroup::new("input").required(true).args(["file", "blob"])))]
 struct AddArgs {
-    #[arg(long, help = "Repository asset path", alias = "asset-path")]
-    path: Option<String>,
+    #[arg(long = "asset-path", help = "Repository asset path (repo-side name)")]
+    asset_path: Option<String>,
     #[arg(
         long,
         help = "Existing blob hash to stage",
-        requires = "path",
+        requires = "asset_path",
         conflicts_with = "file"
     )]
     blob: Option<String>,
-    #[arg(long, help = "Local file to upload and stage", conflicts_with = "blob")]
+    #[arg(
+        long,
+        help = "Local file to upload and stage (auto-selects direct or chunk upload)",
+        conflicts_with = "blob"
+    )]
     file: Option<String>,
     #[arg(long, help = "Target branch; defaults to the login profile branch")]
     branch: Option<String>,
@@ -157,8 +167,8 @@ struct AddArgs {
 
 #[derive(Debug, Args)]
 struct RemoveArgs {
-    #[arg(long, help = "Repository asset path to remove", alias = "asset-path")]
-    path: String,
+    #[arg(long = "asset-path", help = "Repository asset path to remove")]
+    asset_path: String,
     #[arg(long, help = "Target branch; defaults to the login profile branch")]
     branch: Option<String>,
 }
@@ -1035,7 +1045,7 @@ async fn add(args: AddArgs) -> Result<()> {
         .branch
         .unwrap_or_else(|| profile.current_branch.clone());
 
-    match (args.file, args.path, args.blob) {
+    match (args.file, args.asset_path, args.blob) {
         (Some(file), None, None) => {
             add_file(Path::new(&file), None, &branch).await
         }
@@ -1053,7 +1063,7 @@ async fn add(args: AddArgs) -> Result<()> {
             Ok(())
         }
         _ => Err(anyhow!(
-            "use either `ht add --file <local-file> [--path <repo-path>]` or `ht add --path <repo-path> --blob <hash>`"
+            "use either `ht add --file <local-file> [--asset-path <repo-path>]` or `ht add --blob <hash> --asset-path <repo-path>`"
         )),
     }
 }
@@ -1067,11 +1077,11 @@ async fn remove(args: RemoveArgs) -> Result<()> {
     if stage.branch != branch {
         stage = StageFile::default_for_branch(&branch);
     }
-    upsert_stage_asset(&mut stage, &args.path, None);
+    upsert_stage_asset(&mut stage, &args.asset_path, None);
     save_stage(&stage)?;
     println!(
         "staged delete for {} on {} ({} asset(s) staged)",
-        args.path,
+        args.asset_path,
         stage.branch,
         stage.assets.len()
     );
@@ -1668,7 +1678,7 @@ async fn submit(args: SubmitArgs) -> Result<()> {
     };
     if submit_assets.is_empty() {
         return Err(anyhow!(
-            "nothing staged; use `ht add --file <local-file> [--path <repo-path>]` first"
+            "nothing staged; use `ht add --file <local-file> [--asset-path <repo-path>]` first"
         ));
     }
 
@@ -3089,14 +3099,14 @@ fn load_workspace() -> Result<WorkspaceState> {
 }
 
 fn save_workspace(workspace: &WorkspaceState) -> Result<()> {
-    ensure_state_dir()?;
-    let path = workspace_path()?;
-    fs::write(path, serde_json::to_vec_pretty(workspace)?)?;
-    Ok(())
+    let paths = state_paths()?;
+    workspace::ensure_state_dirs(&paths)?;
+    workspace::save_json(&paths.workspace_path, workspace)
 }
 
 fn load_session_state() -> Result<SessionState> {
-    let path = session_path()?;
+    let paths = state_paths()?;
+    let path = paths.state_dir.join("session.json");
     let content =
         fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
     let session: SessionState = serde_json::from_str(&content)?;
@@ -3104,47 +3114,16 @@ fn load_session_state() -> Result<SessionState> {
 }
 
 fn save_session_state(session: &SessionState) -> Result<()> {
-    ensure_state_dir()?;
-    let path = session_path()?;
-    fs::write(path, serde_json::to_vec_pretty(session)?)?;
-    Ok(())
+    let paths = state_paths()?;
+    workspace::ensure_state_dirs(&paths)?;
+    let path = paths.state_dir.join("session.json");
+    workspace::save_json(&path, session)
 }
 
 fn ensure_state_dir() -> Result<()> {
-    let dir = state_dir()?;
-    if !dir.exists() {
-        fs::create_dir_all(&dir)?;
-    }
-    let cache_dir = cache_dir()?;
-    if !cache_dir.exists() {
-        fs::create_dir_all(&cache_dir)?;
-    }
+    let paths = state_paths()?;
+    workspace::ensure_state_dirs(&paths)?;
     Ok(())
-}
-
-fn state_dir() -> Result<PathBuf> {
-    let cwd = std::env::current_dir()?;
-    Ok(cwd.join(".hypertide"))
-}
-
-fn profile_path() -> Result<PathBuf> {
-    Ok(state_dir()?.join("profile.json"))
-}
-
-fn stage_path() -> Result<PathBuf> {
-    Ok(state_dir()?.join("stage.json"))
-}
-
-fn workspace_path() -> Result<PathBuf> {
-    Ok(state_dir()?.join("workspace.json"))
-}
-
-fn session_path() -> Result<PathBuf> {
-    Ok(state_dir()?.join("session.json"))
-}
-
-fn cache_dir() -> Result<PathBuf> {
-    Ok(state_dir()?.join("cache").join("objects"))
 }
 
 fn cache_object_path(hash: &str) -> Result<PathBuf> {
@@ -3178,7 +3157,7 @@ mod cli_tests {
             vec!["ht", "branch", "create", "--repo", "r", "--name", "feat"],
             vec!["ht", "branch", "list", "--repo", "r"],
             vec!["ht", "branch", "switch", "--repo", "r", "--name", "main"],
-            vec!["ht", "add", "--path", "a", "--blob", "b"],
+            vec!["ht", "add", "--asset-path", "a", "--blob", "b"],
             vec!["ht", "remove", "--asset-path", "a"],
             vec!["ht", "submit"],
             vec!["ht", "log"],
@@ -3505,7 +3484,7 @@ mod cli_tests {
             "add",
             "--file",
             "tree.uasset",
-            "--path",
+            "--asset-path",
             "Content/tree.uasset",
         ])
         .is_ok());
@@ -3527,5 +3506,261 @@ mod cli_tests {
         let add_help = add.render_long_help().to_string();
         assert!(add_help.contains("Local file to upload and stage"));
         assert!(add_help.contains("Repository asset path"));
+    }
+
+    // ── Regression tests: checkout / status / diff / add --file / remove / chunk-upload ──
+
+    #[test]
+    fn checkout_accepts_repo_branch_and_to_flags() {
+        assert!(Cli::try_parse_from(["ht", "checkout"]).is_ok());
+        assert!(Cli::try_parse_from(["ht", "checkout", "--repo", "r", "--branch", "dev"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "ht",
+            "checkout",
+            "--repo",
+            "r",
+            "--branch",
+            "dev",
+            "--to",
+            "cs-1",
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn status_accepts_repo_and_branch_flags() {
+        assert!(Cli::try_parse_from(["ht", "status"]).is_ok());
+        assert!(Cli::try_parse_from(["ht", "status", "--repo", "r"]).is_ok());
+        assert!(Cli::try_parse_from(["ht", "status", "--repo", "r", "--branch", "dev"]).is_ok());
+    }
+
+    #[test]
+    fn diff_accepts_repo_and_branch_flags() {
+        assert!(Cli::try_parse_from(["ht", "diff"]).is_ok());
+        assert!(Cli::try_parse_from(["ht", "diff", "--repo", "r"]).is_ok());
+        assert!(Cli::try_parse_from(["ht", "diff", "--repo", "r", "--branch", "dev"]).is_ok());
+    }
+
+    #[test]
+    fn add_file_mode_stages_with_auto_asset_path() {
+        // --file alone is valid (asset_path defaults to file name)
+        assert!(Cli::try_parse_from(["ht", "add", "--file", "model.fbx"]).is_ok());
+    }
+
+    #[test]
+    fn add_file_mode_with_explicit_asset_path() {
+        assert!(Cli::try_parse_from([
+            "ht",
+            "add",
+            "--file",
+            "model.fbx",
+            "--asset-path",
+            "Content/Models/model.fbx",
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn add_blob_mode_requires_asset_path() {
+        // --blob without --asset-path should fail
+        let result = Cli::try_parse_from(["ht", "add", "--blob", "abc123"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn add_blob_mode_with_asset_path() {
+        assert!(Cli::try_parse_from([
+            "ht",
+            "add",
+            "--blob",
+            "abc123",
+            "--asset-path",
+            "Content/data.bin",
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn remove_requires_asset_path() {
+        let result = Cli::try_parse_from(["ht", "remove"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn remove_accepts_asset_path_and_branch() {
+        assert!(Cli::try_parse_from([
+            "ht",
+            "remove",
+            "--asset-path",
+            "Content/old.uasset",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "ht",
+            "remove",
+            "--asset-path",
+            "Content/old.uasset",
+            "--branch",
+            "dev",
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn chunk_upload_accepts_all_flags() {
+        assert!(Cli::try_parse_from([
+            "ht",
+            "chunk-upload",
+            "--file",
+            "big.bin",
+            "--chunk-size",
+            "8388608",
+            "--chunk-size-policy",
+            "fixed-8m",
+            "--manifest-only",
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn chunk_upload_defaults_are_correct() {
+        let matches = Cli::try_parse_from(["ht", "chunk-upload", "--file", "f.bin"]).unwrap();
+        if let Command::ChunkUpload(args) = matches.command {
+            assert_eq!(args.chunk_size, 4 * 1024 * 1024);
+            assert_eq!(args.chunk_size_policy, "fixed-4m");
+            assert!(!args.manifest_only);
+        } else {
+            panic!("expected ChunkUpload command");
+        }
+    }
+
+    #[test]
+    fn workspace_state_roundtrip() {
+        let ws = WorkspaceState {
+            repo_id: "repo-x".into(),
+            branch: "feature".into(),
+            workspace_root: "/tmp/work".into(),
+            base_changeset_id: Some("cs-42".into()),
+            checked_out_assets: vec![
+                WorkspaceFile { path: "a.bin".into(), blob_hash: "h1".into() },
+                WorkspaceFile { path: "b.bin".into(), blob_hash: "h2".into() },
+            ],
+            last_synced_at: 1_700_000_000,
+        };
+        let json = serde_json::to_string(&ws).unwrap();
+        let loaded: WorkspaceState = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.repo_id, "repo-x");
+        assert_eq!(loaded.branch, "feature");
+        assert_eq!(loaded.checked_out_assets.len(), 2);
+        assert_eq!(loaded.checked_out_assets[0].blob_hash, "h1");
+    }
+
+    #[test]
+    fn stage_file_roundtrip() {
+        let stage = StageFile {
+            branch: "main".into(),
+            base_changeset_id: Some("ROOT".into()),
+            assets: vec![
+                AssetDelta { path: "x.bin".into(), blob_hash: Some("h1".into()) },
+                AssetDelta { path: "y.bin".into(), blob_hash: None },
+            ],
+        };
+        let json = serde_json::to_string(&stage).unwrap();
+        let loaded: StageFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.branch, "main");
+        assert_eq!(loaded.assets.len(), 2);
+        assert_eq!(loaded.assets[0].blob_hash.as_deref(), Some("h1"));
+        assert_eq!(loaded.assets[1].blob_hash, None);
+    }
+
+    #[test]
+    fn upsert_stage_asset_adds_new_and_updates_existing() {
+        let mut stage = StageFile::default_for_branch("main");
+        upsert_stage_asset(&mut stage, "a.bin", Some("h1".into()));
+        assert_eq!(stage.assets.len(), 1);
+        assert_eq!(stage.assets[0].blob_hash.as_deref(), Some("h1"));
+
+        // Update existing
+        upsert_stage_asset(&mut stage, "a.bin", Some("h2".into()));
+        assert_eq!(stage.assets.len(), 1);
+        assert_eq!(stage.assets[0].blob_hash.as_deref(), Some("h2"));
+
+        // Add another
+        upsert_stage_asset(&mut stage, "b.bin", Some("h3".into()));
+        assert_eq!(stage.assets.len(), 2);
+    }
+
+    #[test]
+    fn classify_status_locked_by_other() {
+        assert_eq!(
+            classify_asset_status(Some("base"), Some("base"), None, Some("alice"), false),
+            AssetStatusKind::LockedByOther
+        );
+    }
+
+    #[test]
+    fn classify_status_unmodified() {
+        assert_eq!(
+            classify_asset_status(Some("h"), Some("h"), None, None, false),
+            AssetStatusKind::Unmodified
+        );
+    }
+
+    #[test]
+    fn high_risk_headers_generated_with_secret() {
+        let payload = serde_json::json!({ "file_path": "a.txt" });
+        let headers = build_high_risk_headers(
+            Some("test-secret"),
+            "LOCK_FORCE_RELEASE",
+            "admin",
+            &payload,
+        );
+        assert!(headers.is_some());
+        let h = headers.unwrap();
+        assert!(!h.nonce.is_empty());
+        assert!(h.timestamp > 0);
+        assert!(!h.signature.is_empty());
+    }
+
+    #[test]
+    fn high_risk_headers_none_without_secret() {
+        let payload = serde_json::json!({ "file_path": "a.txt" });
+        let headers = build_high_risk_headers(None, "LOCK_FORCE_RELEASE", "admin", &payload);
+        assert!(headers.is_none());
+    }
+
+    #[test]
+    fn apply_high_risk_headers_adds_request_headers() {
+        let payload = serde_json::json!({ "file_path": "a.txt" });
+        let headers = build_high_risk_headers(Some("s"), "OP", "a", &payload).unwrap();
+        let client = reqwest::Client::new();
+        let req = apply_high_risk_headers(client.post("http://localhost"), Some(&headers));
+        let built = req.build().unwrap();
+        assert!(built.headers().contains_key("X-HT-Nonce"));
+        assert!(built.headers().contains_key("X-HT-Timestamp"));
+        assert!(built.headers().contains_key("X-HT-Signature"));
+    }
+
+    #[test]
+    fn asset_status_kind_as_str_matches_expected_values() {
+        assert_eq!(AssetStatusKind::Unmodified.as_str(), "unmodified");
+        assert_eq!(AssetStatusKind::Modified.as_str(), "modified");
+        assert_eq!(AssetStatusKind::Added.as_str(), "added");
+        assert_eq!(AssetStatusKind::Deleted.as_str(), "deleted");
+        assert_eq!(AssetStatusKind::Staged.as_str(), "staged");
+        assert_eq!(AssetStatusKind::LockedByOther.as_str(), "locked_by_other");
+        assert_eq!(AssetStatusKind::StaleBase.as_str(), "stale_base");
+    }
+
+    #[test]
+    fn normalize_asset_path_converts_backslashes() {
+        assert_eq!(
+            normalize_asset_path(Path::new("Content\\Models\\tree.fbx")),
+            "Content/Models/tree.fbx"
+        );
+        assert_eq!(
+            normalize_asset_path(Path::new("Content/Models/tree.fbx")),
+            "Content/Models/tree.fbx"
+        );
     }
 }
