@@ -1,8 +1,8 @@
 //! Storage Manager
 //! Handles file upload/download operations with local and S3 backends
 
-use blake3::Hasher;
 use crate::core::error::HyperTideError;
+use blake3::Hasher;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -41,12 +41,12 @@ impl StorageManager {
         let objects_dir = self.storage_root.join("objects");
         let temp_dir = self.storage_root.join("temp");
 
-        fs::create_dir_all(&objects_dir)
-            .await
-            .map_err(|e| HyperTideError::Persistence(format!("Failed to create objects dir: {}", e)))?;
-        fs::create_dir_all(&temp_dir)
-            .await
-            .map_err(|e| HyperTideError::Persistence(format!("Failed to create temp dir: {}", e)))?;
+        fs::create_dir_all(&objects_dir).await.map_err(|e| {
+            HyperTideError::Persistence(format!("Failed to create objects dir: {}", e))
+        })?;
+        fs::create_dir_all(&temp_dir).await.map_err(|e| {
+            HyperTideError::Persistence(format!("Failed to create temp dir: {}", e))
+        })?;
 
         Ok(())
     }
@@ -60,7 +60,11 @@ impl StorageManager {
 
     /// Store file content, returns the content hash
     /// Uses Content-Addressable Storage (CAS) - files stored by their hash
-    pub async fn store(&self, data: &[u8], original_path: &str) -> Result<StoredFile, HyperTideError> {
+    pub async fn store(
+        &self,
+        data: &[u8],
+        original_path: &str,
+    ) -> Result<StoredFile, HyperTideError> {
         let hash = Self::calculate_hash(data);
         let size_bytes = data.len() as u64;
 
@@ -83,15 +87,15 @@ impl StorageManager {
         }
 
         // Create subdirectory if needed
-        fs::create_dir_all(&object_dir)
-            .await
-            .map_err(|e| HyperTideError::Persistence(format!("Failed to create object subdir: {}", e)))?;
+        fs::create_dir_all(&object_dir).await.map_err(|e| {
+            HyperTideError::Persistence(format!("Failed to create object subdir: {}", e))
+        })?;
 
         // Write file atomically (write to temp, then rename)
         let temp_path = self.storage_root.join("temp").join(&hash);
-        let mut file = fs::File::create(&temp_path)
-            .await
-            .map_err(|e| HyperTideError::Persistence(format!("Failed to create temp file: {}", e)))?;
+        let mut file = fs::File::create(&temp_path).await.map_err(|e| {
+            HyperTideError::Persistence(format!("Failed to create temp file: {}", e))
+        })?;
 
         file.write_all(data)
             .await
@@ -109,7 +113,10 @@ impl StorageManager {
                     let _ = fs::remove_file(&temp_path).await;
                 }
                 Ok(false) => {
-                    return Err(HyperTideError::Persistence(format!("Failed to move file to storage: {}", rename_error)));
+                    return Err(HyperTideError::Persistence(format!(
+                        "Failed to move file to storage: {}",
+                        rename_error
+                    )));
                 }
                 Err(exists_error) => {
                     return Err(HyperTideError::Persistence(format!(
@@ -141,7 +148,10 @@ impl StorageManager {
             .await
             .map_err(HyperTideError::Persistence)?
         {
-            return Err(HyperTideError::NotFound(format!("Object not found: {}", hash)));
+            return Err(HyperTideError::NotFound(format!(
+                "Object not found: {}",
+                hash
+            )));
         }
 
         fs::read(&object_path)
@@ -242,7 +252,9 @@ mod tests {
         if let Err(error) = permission_attempt {
             assert!(
                 error.to_string().contains("Failed to create object subdir")
-                    || error.to_string().contains("Failed to check object existence before store")
+                    || error
+                        .to_string()
+                        .contains("Failed to check object existence before store")
             );
         } else {
             // In privileged environments permission bits may not block access;
@@ -253,8 +265,12 @@ mod tests {
             let fallback = manager.store(b"blocked-fallback", "blocked.bin").await;
             let fallback_error = fallback.expect_err("store should fail on poisoned prefix dir");
             assert!(
-                fallback_error.to_string().contains("Failed to create object subdir")
-                    || fallback_error.to_string().contains("Failed to check object existence before store")
+                fallback_error
+                    .to_string()
+                    .contains("Failed to create object subdir")
+                    || fallback_error
+                        .to_string()
+                        .contains("Failed to check object existence before store")
             );
             std::fs::remove_file(blocked_prefix).ok();
         }
@@ -299,16 +315,7 @@ mod tests {
             }
         }
 
-
         std::fs::remove_file(object_dir).ok();
         std::fs::remove_dir_all(root).ok();
     }
 }
-
-
-
-
-
-
-
-

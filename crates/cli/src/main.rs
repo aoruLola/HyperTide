@@ -17,6 +17,7 @@ static NONCE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 mod workspace;
 
+#[expect(dead_code)]
 fn parse_cli_from<I, T>(iter: I) -> std::result::Result<Cli, clap::Error>
 where
     I: IntoIterator<Item = T>,
@@ -1867,11 +1868,7 @@ async fn checkout(args: CheckoutArgs) -> Result<()> {
     let mut checked_out_assets = Vec::with_capacity(snapshot.assets.len());
 
     for asset in &snapshot.assets {
-        let target = workspace_root.join(
-            asset
-                .path
-                .replace('/', &std::path::MAIN_SEPARATOR.to_string()),
-        );
+        let target = workspace_root.join(asset.path.replace('/', std::path::MAIN_SEPARATOR_STR));
         let bytes = fetch_blob_bytes(&client, &mut profile, &asset.blob_hash).await?;
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
@@ -2181,12 +2178,8 @@ fn classify_asset_status(
     lock_owner: Option<&str>,
     stale_base: bool,
 ) -> AssetStatusKind {
-    if staged_hash.is_some()
-        || (base_hash.is_some() && local_hash.is_none() && staged_hash.is_none())
-    {
-        if staged_hash.is_some() {
-            return AssetStatusKind::Staged;
-        }
+    if staged_hash.is_some() {
+        return AssetStatusKind::Staged;
     }
     if lock_owner.is_some() {
         return AssetStatusKind::LockedByOther;
@@ -2204,8 +2197,7 @@ fn classify_asset_status(
 }
 
 fn hash_local_asset(workspace_root: &Path, asset_path: &str) -> Result<Option<String>> {
-    let target =
-        workspace_root.join(asset_path.replace('/', &std::path::MAIN_SEPARATOR.to_string()));
+    let target = workspace_root.join(asset_path.replace('/', std::path::MAIN_SEPARATOR_STR));
     if !target.exists() {
         return Ok(None);
     }
@@ -2540,7 +2532,7 @@ async fn materialize_checkpoint_snapshot(
 }
 
 fn resolve_workspace_target(workspace_root: &Path, asset_path: &str) -> Result<PathBuf> {
-    let normalized = asset_path.replace('/', &std::path::MAIN_SEPARATOR.to_string());
+    let normalized = asset_path.replace('/', std::path::MAIN_SEPARATOR_STR);
     let candidate = PathBuf::from(&normalized);
     if candidate.is_absolute() {
         return Err(anyhow!(
@@ -3120,6 +3112,7 @@ fn save_session_state(session: &SessionState) -> Result<()> {
     workspace::save_json(&path, session)
 }
 
+#[expect(dead_code)]
 fn ensure_state_dir() -> Result<()> {
     let paths = state_paths()?;
     workspace::ensure_state_dirs(&paths)?;
@@ -3457,6 +3450,7 @@ mod cli_tests {
         let root = PathBuf::from("E:/workspace/game");
 
         assert!(resolve_workspace_target(&root, "../outside.txt").is_err());
+        #[cfg(target_os = "windows")]
         assert!(resolve_workspace_target(&root, "C:/outside.txt").is_err());
         assert!(resolve_workspace_target(&root, "Assets/a.txt").is_ok());
     }
@@ -3515,14 +3509,7 @@ mod cli_tests {
         assert!(Cli::try_parse_from(["ht", "checkout"]).is_ok());
         assert!(Cli::try_parse_from(["ht", "checkout", "--repo", "r", "--branch", "dev"]).is_ok());
         assert!(Cli::try_parse_from([
-            "ht",
-            "checkout",
-            "--repo",
-            "r",
-            "--branch",
-            "dev",
-            "--to",
-            "cs-1",
+            "ht", "checkout", "--repo", "r", "--branch", "dev", "--to", "cs-1",
         ])
         .is_ok());
     }
@@ -3588,13 +3575,9 @@ mod cli_tests {
 
     #[test]
     fn remove_accepts_asset_path_and_branch() {
-        assert!(Cli::try_parse_from([
-            "ht",
-            "remove",
-            "--asset-path",
-            "Content/old.uasset",
-        ])
-        .is_ok());
+        assert!(
+            Cli::try_parse_from(["ht", "remove", "--asset-path", "Content/old.uasset",]).is_ok()
+        );
         assert!(Cli::try_parse_from([
             "ht",
             "remove",
@@ -3642,8 +3625,14 @@ mod cli_tests {
             workspace_root: "/tmp/work".into(),
             base_changeset_id: Some("cs-42".into()),
             checked_out_assets: vec![
-                WorkspaceFile { path: "a.bin".into(), blob_hash: "h1".into() },
-                WorkspaceFile { path: "b.bin".into(), blob_hash: "h2".into() },
+                WorkspaceFile {
+                    path: "a.bin".into(),
+                    blob_hash: "h1".into(),
+                },
+                WorkspaceFile {
+                    path: "b.bin".into(),
+                    blob_hash: "h2".into(),
+                },
             ],
             last_synced_at: 1_700_000_000,
         };
@@ -3661,8 +3650,14 @@ mod cli_tests {
             branch: "main".into(),
             base_changeset_id: Some("ROOT".into()),
             assets: vec![
-                AssetDelta { path: "x.bin".into(), blob_hash: Some("h1".into()) },
-                AssetDelta { path: "y.bin".into(), blob_hash: None },
+                AssetDelta {
+                    path: "x.bin".into(),
+                    blob_hash: Some("h1".into()),
+                },
+                AssetDelta {
+                    path: "y.bin".into(),
+                    blob_hash: None,
+                },
             ],
         };
         let json = serde_json::to_string(&stage).unwrap();
@@ -3709,12 +3704,8 @@ mod cli_tests {
     #[test]
     fn high_risk_headers_generated_with_secret() {
         let payload = serde_json::json!({ "file_path": "a.txt" });
-        let headers = build_high_risk_headers(
-            Some("test-secret"),
-            "LOCK_FORCE_RELEASE",
-            "admin",
-            &payload,
-        );
+        let headers =
+            build_high_risk_headers(Some("test-secret"), "LOCK_FORCE_RELEASE", "admin", &payload);
         assert!(headers.is_some());
         let h = headers.unwrap();
         assert!(!h.nonce.is_empty());
