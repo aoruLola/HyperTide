@@ -50,6 +50,11 @@ impl From<StorageError> for HyperTideError {
 /// All methods take a BLAKE3 hash as the key. Data is stored and retrieved by hash,
 /// enabling automatic deduplication.
 #[async_trait]
+/// Storage backend abstraction for content-addressable storage.
+///
+/// This trait and its implementations are not yet integrated into the server.
+/// Integration will happen in a follow-up phase.
+#[expect(dead_code)]
 pub trait StorageBackend: Send + Sync {
     /// Store data and return its hash. If the data already exists, returns the existing hash.
     async fn store(&self, hash: &str, data: &[u8]) -> Result<(), StorageError>;
@@ -67,7 +72,8 @@ pub trait StorageBackend: Send + Sync {
     async fn list(&self, prefix: &str) -> Result<Vec<String>, StorageError>;
 }
 
-/// Calculate BLAKE3 hash of data.
+/// Calculate BLAKE3 hash for content-addressable storage.
+#[expect(dead_code)]
 pub fn calculate_hash(data: &[u8]) -> String {
     let mut hasher = Hasher::new();
     hasher.update(data);
@@ -83,13 +89,15 @@ pub struct LocalFsBackend {
 }
 
 impl LocalFsBackend {
+    #[expect(dead_code)]
     pub fn new(root: impl AsRef<Path>) -> Self {
         Self {
             root: root.as_ref().to_path_buf(),
         }
     }
 
-    /// Initialize storage directory structure.
+    /// Initialize the storage directory.
+    #[expect(dead_code)]
     pub async fn init(&self) -> Result<(), StorageError> {
         fs::create_dir_all(self.root.join("objects")).await?;
         fs::create_dir_all(self.root.join("temp")).await?;
@@ -146,7 +154,10 @@ impl StorageBackend for LocalFsBackend {
             .ok_or_else(|| StorageError::Validation("invalid hash".to_string()))?;
 
         if !object_path.exists() {
-            return Err(StorageError::NotFound(format!("object not found: {}", hash)));
+            return Err(StorageError::NotFound(format!(
+                "object not found: {}",
+                hash
+            )));
         }
 
         Ok(fs::read(&object_path).await?)

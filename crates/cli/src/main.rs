@@ -69,6 +69,7 @@ enum Command {
     Doctor(cmd::doctor::DoctorArgs),
 }
 
+#[expect(dead_code)]
 fn parse_cli_from<I, T>(iter: I) -> std::result::Result<Cli, clap::Error>
 where
     I: IntoIterator<Item = T>,
@@ -195,7 +196,9 @@ mod cli_tests {
 
     #[test]
     fn branch_switch_accepts_force_flag() {
-        assert!(Cli::try_parse_from(["ht", "branch", "switch", "--name", "main", "--force"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["ht", "branch", "switch", "--name", "main", "--force"]).is_ok()
+        );
     }
 
     #[test]
@@ -238,29 +241,57 @@ mod cli_tests {
     #[test]
     fn changeset_commands_accept_required_flags() {
         assert!(Cli::try_parse_from([
-            "ht", "changeset", "approve", "--repo", "repo-a", "--id", "cs-1",
+            "ht",
+            "changeset",
+            "approve",
+            "--repo",
+            "repo-a",
+            "--id",
+            "cs-1",
         ])
         .is_ok());
         assert!(Cli::try_parse_from([
-            "ht", "changeset", "promote", "--repo", "repo-a", "--id", "cs-1",
-            "--high-risk-secret", "secret",
+            "ht",
+            "changeset",
+            "promote",
+            "--repo",
+            "repo-a",
+            "--id",
+            "cs-1",
+            "--high-risk-secret",
+            "secret",
         ])
         .is_ok());
         assert!(Cli::try_parse_from([
-            "ht", "changeset", "gate", "--repo", "repo-a", "--id", "cs-1",
+            "ht",
+            "changeset",
+            "gate",
+            "--repo",
+            "repo-a",
+            "--id",
+            "cs-1",
         ])
         .is_ok());
     }
 
     #[test]
     fn lock_commands_accept_paths_and_high_risk_secret() {
-        assert!(Cli::try_parse_from(["ht", "lock", "acquire", "--path", "Content/a.uasset"]).is_ok());
-        assert!(Cli::try_parse_from(["ht", "lock", "release", "--path", "Content/a.uasset"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["ht", "lock", "acquire", "--path", "Content/a.uasset"]).is_ok()
+        );
+        assert!(
+            Cli::try_parse_from(["ht", "lock", "release", "--path", "Content/a.uasset"]).is_ok()
+        );
         assert!(Cli::try_parse_from(["ht", "lock", "renew", "--path", "Content/a.uasset"]).is_ok());
         assert!(Cli::try_parse_from(["ht", "lock", "list"]).is_ok());
         assert!(Cli::try_parse_from([
-            "ht", "lock", "force-release", "--path", "Content/a.uasset",
-            "--high-risk-secret", "secret",
+            "ht",
+            "lock",
+            "force-release",
+            "--path",
+            "Content/a.uasset",
+            "--high-risk-secret",
+            "secret",
         ])
         .is_ok());
     }
@@ -270,15 +301,35 @@ mod cli_tests {
         assert!(Cli::try_parse_from(["ht", "trust", "checkpoint", "generate"]).is_ok());
         assert!(Cli::try_parse_from(["ht", "trust", "checkpoint", "latest"]).is_ok());
         assert!(Cli::try_parse_from([
-            "ht", "trust", "witness", "attest", "--checkpoint", "tc-1", "--witness", "witness-a",
+            "ht",
+            "trust",
+            "witness",
+            "attest",
+            "--checkpoint",
+            "tc-1",
+            "--witness",
+            "witness-a",
         ])
         .is_ok());
-        assert!(Cli::try_parse_from(["ht", "trust", "witness", "summary", "--checkpoint", "tc-1"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["ht", "trust", "witness", "summary", "--checkpoint", "tc-1"])
+                .is_ok()
+        );
         assert!(Cli::try_parse_from(["ht", "trust", "witness", "topology"]).is_ok());
         assert!(Cli::try_parse_from(["ht", "trust", "audit", "verify"]).is_ok());
         assert!(Cli::try_parse_from([
-            "ht", "trust", "audit", "export", "--limit", "10", "--before-seq", "99",
-            "--action", "CHANGESET_PROMOTED", "--actor", "alice",
+            "ht",
+            "trust",
+            "audit",
+            "export",
+            "--limit",
+            "10",
+            "--before-seq",
+            "99",
+            "--action",
+            "CHANGESET_PROMOTED",
+            "--actor",
+            "alice",
         ])
         .is_ok());
         assert!(Cli::try_parse_from(["ht", "trust", "replay", "verify"]).is_ok());
@@ -300,9 +351,16 @@ mod cli_tests {
 
     #[test]
     fn remove_accepts_asset_path_and_branch() {
-        assert!(Cli::try_parse_from(["ht", "remove", "--asset-path", "Content/old.uasset"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["ht", "remove", "--asset-path", "Content/old.uasset"]).is_ok()
+        );
         assert!(Cli::try_parse_from([
-            "ht", "remove", "--asset-path", "Content/old.uasset", "--branch", "dev",
+            "ht",
+            "remove",
+            "--asset-path",
+            "Content/old.uasset",
+            "--branch",
+            "dev",
         ])
         .is_ok());
     }
@@ -310,8 +368,15 @@ mod cli_tests {
     #[test]
     fn chunk_upload_accepts_all_flags() {
         assert!(Cli::try_parse_from([
-            "ht", "chunk-upload", "--file", "big.bin", "--chunk-size", "8388608",
-            "--chunk-size-policy", "fixed-8m", "--manifest-only",
+            "ht",
+            "chunk-upload",
+            "--file",
+            "big.bin",
+            "--chunk-size",
+            "8388608",
+            "--chunk-size-policy",
+            "fixed-8m",
+            "--manifest-only",
         ])
         .is_ok());
     }

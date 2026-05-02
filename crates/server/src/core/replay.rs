@@ -49,6 +49,7 @@ pub struct ReplayService {
 
 #[derive(Debug, sqlx::FromRow)]
 struct EventRow {
+    #[expect(dead_code)]
     event_id: i64,
     event_type: String,
     payload: Value,
@@ -157,10 +158,9 @@ impl ReplayService {
 
     /// Save a replay checkpoint marking the current event sequence position.
     pub async fn save_checkpoint(&self, checkpoint_id: &str) -> Result<(), sqlx::Error> {
-        let max_seq: Option<i64> =
-            sqlx::query_scalar("SELECT MAX(event_id) FROM event_store")
-                .fetch_one(&self.pool)
-                .await?;
+        let max_seq: Option<i64> = sqlx::query_scalar("SELECT MAX(event_id) FROM event_store")
+            .fetch_one(&self.pool)
+            .await?;
         let event_seq = max_seq.unwrap_or(0);
         sqlx::query(
             r#"

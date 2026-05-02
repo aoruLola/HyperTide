@@ -129,8 +129,12 @@ pub(crate) async fn execute(args: TrustArgs) -> Result<()> {
 
 async fn trust_checkpoint(args: TrustCheckpointArgs) -> Result<()> {
     match args.command {
-        TrustCheckpointCommand::Generate => trust_json_post("/v2/trust/checkpoint/generate", "generate checkpoint").await,
-        TrustCheckpointCommand::Latest => trust_json_get("/v2/trust/checkpoint/latest", "latest checkpoint").await,
+        TrustCheckpointCommand::Generate => {
+            trust_json_post("/v2/trust/checkpoint/generate", "generate checkpoint").await
+        }
+        TrustCheckpointCommand::Latest => {
+            trust_json_get("/v2/trust/checkpoint/latest", "latest checkpoint").await
+        }
     }
 }
 
@@ -202,7 +206,9 @@ async fn trust_replay(args: TrustReplayArgs) -> Result<()> {
 
 async fn trust_retention(args: TrustRetentionArgs) -> Result<()> {
     match args.command {
-        TrustRetentionCommand::Policy => trust_json_get("/v2/trust/retention/policy", "retention policy").await,
+        TrustRetentionCommand::Policy => {
+            trust_json_get("/v2/trust/retention/policy", "retention policy").await
+        }
     }
 }
 

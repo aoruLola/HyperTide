@@ -45,9 +45,7 @@ pub(crate) async fn execute(args: SubmitArgs) -> Result<()> {
     }
 
     let session_id = if args.from_checkpoint.is_some() {
-        load_session_state()
-            .ok()
-            .and_then(|s| s.current_session_id)
+        load_session_state().ok().and_then(|s| s.current_session_id)
     } else {
         None
     };

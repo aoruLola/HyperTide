@@ -126,10 +126,7 @@ async fn checkpoint_branch(args: CheckpointBranchArgs) -> Result<()> {
         branch: &args.name,
         from_changeset_id: snapshot.base_changeset_id.as_deref(),
     };
-    let url = format!(
-        "{}/v2/branches",
-        profile.server.trim_end_matches('/')
-    );
+    let url = format!("{}/v2/branches", profile.server.trim_end_matches('/'));
     let response: ApiResponse<BranchRecord> = send_authed_api(
         &client,
         &mut profile,

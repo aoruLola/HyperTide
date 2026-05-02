@@ -73,7 +73,14 @@ async fn append_auth_event(
 ) {
     if let Some(event_store) = &state.event_store {
         if let Err(error) = event_store
-            .append(event_type, actor_id, None, None, payload, &crate::core::events::EventMetadata::default())
+            .append(
+                event_type,
+                actor_id,
+                None,
+                None,
+                payload,
+                &crate::core::events::EventMetadata::default(),
+            )
             .await
         {
             tracing::warn!("failed to append auth event {event_type}: {error}");

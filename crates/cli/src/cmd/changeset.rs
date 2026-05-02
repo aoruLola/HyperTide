@@ -52,10 +52,7 @@ async fn changeset_approve(args: ChangesetActionArgs) -> Result<()> {
     let repo = resolve_repo(&profile, args.repo.as_deref())?;
     let client = reqwest::Client::new();
     let actor_id = fetch_owner_id(&client, &profile).await?;
-    let mut path = format!(
-        "/v2/changesets/{}/approve",
-        args.id
-    );
+    let mut path = format!("/v2/changesets/{}/approve", args.id);
     let mut sep = '?';
     push_query_param(&mut path, &mut sep, "repo_id", Some(&repo));
     let url = format!("{}{}", profile.server.trim_end_matches('/'), path);
@@ -94,10 +91,7 @@ async fn changeset_promote(args: ChangesetPromoteArgs) -> Result<()> {
         &actor_id,
         &payload,
     );
-    let mut path = format!(
-        "/v2/changesets/{}/promote",
-        args.id
-    );
+    let mut path = format!("/v2/changesets/{}/promote", args.id);
     let mut sep = '?';
     push_query_param(&mut path, &mut sep, "repo_id", Some(&repo));
     let url = format!("{}{}", profile.server.trim_end_matches('/'), path);
@@ -123,10 +117,7 @@ async fn changeset_gate(args: ChangesetActionArgs) -> Result<()> {
     let mut profile = load_profile()?;
     let repo = resolve_repo(&profile, args.repo.as_deref())?;
     let client = reqwest::Client::new();
-    let mut path = format!(
-        "/v2/changesets/{}/gate",
-        args.id
-    );
+    let mut path = format!("/v2/changesets/{}/gate", args.id);
     let mut sep = '?';
     push_query_param(&mut path, &mut sep, "repo_id", Some(&repo));
     let url = format!("{}{}", profile.server.trim_end_matches('/'), path);

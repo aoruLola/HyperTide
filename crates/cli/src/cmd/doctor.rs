@@ -24,10 +24,7 @@ pub(crate) async fn execute(_args: DoctorArgs) -> Result<()> {
 
             // 2. Server connectivity
             let client = reqwest::Client::new();
-            let health_url = format!(
-                "{}/health/ready",
-                profile.server.trim_end_matches('/')
-            );
+            let health_url = format!("{}/health/ready", profile.server.trim_end_matches('/'));
             match client
                 .get(&health_url)
                 .timeout(std::time::Duration::from_secs(5))

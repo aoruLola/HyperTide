@@ -30,8 +30,7 @@ pub(crate) async fn execute(args: SyncArgs) -> Result<()> {
     .await?;
 
     // Preserve existing stage assets — only update base_changeset_id
-    let mut stage =
-        load_stage().unwrap_or_else(|_| StageFile::default_for_branch(&branch));
+    let mut stage = load_stage().unwrap_or_else(|_| StageFile::default_for_branch(&branch));
     stage.base_changeset_id = snapshot.changeset_id;
     save_stage(&stage)?;
     if let Ok(mut workspace) = load_workspace() {

@@ -68,7 +68,8 @@ impl LockManager {
         file_path: String,
         owner_id: String,
     ) -> Result<FileLock, HyperTideError> {
-        self.try_lock_with_repo(file_path, owner_id, "", "asset").await
+        self.try_lock_with_repo(file_path, owner_id, "", "asset")
+            .await
     }
 
     /// Attempt to lock a file with repo_id and scope context.

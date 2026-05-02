@@ -82,11 +82,7 @@ pub(crate) async fn execute(args: StatusArgs) -> Result<()> {
                 lock_owner,
                 stale_base,
             );
-            println!(
-                "{:<12} {}",
-                status.as_str(),
-                row.path
-            );
+            println!("{:<12} {}", status.as_str(), row.path);
         }
     }
     Ok(())

@@ -66,10 +66,7 @@ fn stage_list() -> Result<()> {
         println!(
             "staged assets on {} (base={}):",
             stage.branch,
-            stage
-                .base_changeset_id
-                .as_deref()
-                .unwrap_or("<none>")
+            stage.base_changeset_id.as_deref().unwrap_or("<none>")
         );
         for asset in &stage.assets {
             let hash = asset.blob_hash.as_deref().unwrap_or("<deleted>");

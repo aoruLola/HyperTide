@@ -806,18 +806,14 @@ pub(crate) fn api_error_message<T>(response: &ApiResponse<T>, fallback: &str) ->
     response
         .error
         .as_ref()
-        .map(|error| friendly_error(error))
+        .map(friendly_error)
         .unwrap_or_else(|| fallback.to_string())
 }
 
 pub(crate) fn friendly_error(err: &ApiError) -> String {
     match err.code.as_str() {
         "conflict" if err.message.contains("locked by") => {
-            let owner = err
-                .message
-                .split("locked by ")
-                .nth(1)
-                .unwrap_or("unknown");
+            let owner = err.message.split("locked by ").nth(1).unwrap_or("unknown");
             format!(
                 "文件已被 {} 锁定。\n\
                  使用 'ht lock list' 查看所有锁。\n\
@@ -834,9 +830,7 @@ pub(crate) fn friendly_error(err: &ApiError) -> String {
         "UNAUTHORIZED" | "unauthorized" => {
             "认证失败。请检查 API Key 或重新执行 'ht login'。".to_string()
         }
-        "FORBIDDEN" | "forbidden" => {
-            "权限不足。请联系仓库管理员。".to_string()
-        }
+        "FORBIDDEN" | "forbidden" => "权限不足。请联系仓库管理员。".to_string(),
         _ => format!("[{}] {}", err.code, err.message),
     }
 }
@@ -869,9 +863,7 @@ where
 {
     ensure_access_token(client, profile).await?;
 
-    let session_id = load_session_state()
-        .ok()
-        .and_then(|s| s.current_session_id);
+    let session_id = load_session_state().ok().and_then(|s| s.current_session_id);
 
     let mut response: HttpResponse<T> = {
         let req = build_request(client, profile);
@@ -1624,9 +1616,7 @@ pub(crate) async fn send_lock_path_request(
 ) -> Result<FileLockInfo> {
     let mut profile = load_profile()?;
     let client = reqwest::Client::new();
-    let payload = LockRequest {
-        file_path: path,
-    };
+    let payload = LockRequest { file_path: path };
     let url = format!(
         "{}/v2/locks/{}",
         profile.server.trim_end_matches('/'),

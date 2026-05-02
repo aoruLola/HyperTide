@@ -80,10 +80,7 @@ async fn lock_list() -> Result<()> {
 }
 
 async fn lock_force_release(args: LockForceReleaseArgs) -> Result<()> {
-    confirm_dangerous(
-        &format!("force release lock on {}", args.path),
-        args.yes,
-    )?;
+    confirm_dangerous(&format!("force release lock on {}", args.path), args.yes)?;
     let mut profile = load_profile()?;
     let client = reqwest::Client::new();
     let payload = LockRequest {
