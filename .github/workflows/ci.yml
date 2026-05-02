@@ -16,10 +16,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Configure git auth for enterprise repo
-        if: ${{ secrets.ENTERPRISE_PAT != '' }}
+      - name: Configure git for enterprise deps
+        env:
+          GH_TOKEN: ${{ secrets.ENTERPRISE_PAT }}
         run: |
-          git config --global url."https://${{ secrets.ENTERPRISE_PAT }}@github.com/openLYURA/".insteadOf "https://github.com/openLYURA/"
+          if [ -n "$GH_TOKEN" ]; then
+            git config --global url."https://${GH_TOKEN}@github.com/openLYURA/".insteadOf "https://github.com/openLYURA/"
+          fi
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace
@@ -45,10 +48,13 @@ jobs:
       DATABASE_URL: postgres://hypertide:hypertide@localhost/hypertide
     steps:
       - uses: actions/checkout@v4
-      - name: Configure git auth for enterprise repo
-        if: ${{ secrets.ENTERPRISE_PAT != '' }}
+      - name: Configure git for enterprise deps
+        env:
+          GH_TOKEN: ${{ secrets.ENTERPRISE_PAT }}
         run: |
-          git config --global url."https://${{ secrets.ENTERPRISE_PAT }}@github.com/openLYURA/".insteadOf "https://github.com/openLYURA/"
+          if [ -n "$GH_TOKEN" ]; then
+            git config --global url."https://${GH_TOKEN}@github.com/openLYURA/".insteadOf "https://github.com/openLYURA/"
+          fi
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
@@ -58,10 +64,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Configure git auth for enterprise repo
-        if: ${{ secrets.ENTERPRISE_PAT != '' }}
+      - name: Configure git for enterprise deps
+        env:
+          GH_TOKEN: ${{ secrets.ENTERPRISE_PAT }}
         run: |
-          git config --global url."https://${{ secrets.ENTERPRISE_PAT }}@github.com/openLYURA/".insteadOf "https://github.com/openLYURA/"
+          if [ -n "$GH_TOKEN" ]; then
+            git config --global url."https://${GH_TOKEN}@github.com/openLYURA/".insteadOf "https://github.com/openLYURA/"
+          fi
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
