@@ -65,12 +65,12 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: |
           mkdir dist
-          cp target/${{ matrix.target }}/release/hypertide.exe dist/
-          cp target/${{ matrix.target }}/release/ht.exe dist/
-          cp -r deploy dist/
-          cp -r docs dist/
-          cp README.md CONTRIBUTING.md SECURITY.md LICENSE dist/
-          cp dependency-tree.txt dependency-metadata.json dist/
+          Copy-Item "target/${{ matrix.target }}/release/hypertide.exe" -Destination dist/
+          Copy-Item "target/${{ matrix.target }}/release/ht.exe" -Destination dist/
+          Copy-Item deploy -Destination dist/ -Recurse
+          Copy-Item docs -Destination dist/ -Recurse
+          Copy-Item README.md, CONTRIBUTING.md, SECURITY.md, LICENSE -Destination dist/
+          Copy-Item dependency-tree.txt, dependency-metadata.json -Destination dist/
           Compress-Archive -Path dist/* -DestinationPath ${{ matrix.artifact }}.zip
           Get-FileHash ${{ matrix.artifact }}.zip -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  ${{ matrix.artifact }}.zip" } | Out-File -Encoding ascii ${{ matrix.artifact }}.zip.sha256
 
