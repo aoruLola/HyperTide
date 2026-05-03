@@ -16,13 +16,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Configure git for enterprise deps
-        env:
-          GH_TOKEN: ${{ secrets.ENTERPRISE_PAT }}
-        run: |
-          if [ -n "$GH_TOKEN" ]; then
-            git config --global url."https://${GH_TOKEN}@github.com/openLYURA/".insteadOf "https://github.com/openLYURA/"
-          fi
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace
@@ -48,13 +41,6 @@ jobs:
       DATABASE_URL: postgres://hypertide:hypertide@localhost/hypertide
     steps:
       - uses: actions/checkout@v4
-      - name: Configure git for enterprise deps
-        env:
-          GH_TOKEN: ${{ secrets.ENTERPRISE_PAT }}
-        run: |
-          if [ -n "$GH_TOKEN" ]; then
-            git config --global url."https://${GH_TOKEN}@github.com/openLYURA/".insteadOf "https://github.com/openLYURA/"
-          fi
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
@@ -64,13 +50,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Configure git for enterprise deps
-        env:
-          GH_TOKEN: ${{ secrets.ENTERPRISE_PAT }}
-        run: |
-          if [ -n "$GH_TOKEN" ]; then
-            git config --global url."https://${GH_TOKEN}@github.com/openLYURA/".insteadOf "https://github.com/openLYURA/"
-          fi
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -87,3 +66,22 @@ jobs:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
+
+  compose-smoke:
+    name: Compose Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and smoke production Compose stack
+        run: bash deploy/server/ci-compose-smoke.sh
+
+  backup-restore-smoke:
+    name: Backup Restore Smoke
+    runs-on: ubuntu-latest
+    needs: compose-smoke
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create backup from production Compose stack
+        run: bash deploy/server/ci-compose-smoke.sh
+      - name: Restore backup into fresh Compose stack
+        run: bash deploy/server/ci-restore-smoke.sh

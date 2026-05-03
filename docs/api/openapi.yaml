@@ -1,4 +1,4 @@
-﻿openapi: 3.0.3
+openapi: 3.0.3
 info:
   title: HyperTide Backend API
   version: 2.0.0-draft
@@ -17,6 +17,16 @@ paths:
       responses:
         '200': { description: Ready }
         '503': { description: Not ready }
+  /metrics:
+    get:
+      summary: Prometheus-compatible operational metrics
+      responses:
+        '200':
+          description: Metrics in Prometheus text exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
   /v2/auth/verify:
     get:
       summary: Verify API key validity

@@ -2,14 +2,15 @@
 
 [Chinese README](README_CN.md)
 
-HyperTide is a centralized collaboration and versioning system for large binary asset workflows. It keeps version truth, branch state, locks, approvals, audit, and replay controls on the server, while the CLI and future UI provide workspace-oriented workflows.
+HyperTide Community Edition is an open-core, self-hostable collaboration and versioning system for large binary asset workflows. It keeps version truth, branch state, locks, approvals, audit, witness checkpoints, and replay controls on the server, while the CLI and future UI provide workspace-oriented workflows.
 
-> This repository is the primary codebase for the commercial incubation phase of HyperTide and is temporarily public for review purposes. Public visibility is not an open source release; except for the limited review permission in [LICENSE.md](LICENSE.md), all rights are reserved.
+> HyperTide Community Edition is open source under the [MIT License](LICENSE). HyperTide Enterprise is a separate commercial offering that builds on the public open-core extension points for advanced identity, policy, attestation, compliance, governance, and support needs.
 
 ## Contents
 
 - [Product Positioning](#product-positioning)
 - [Core Capabilities](#core-capabilities)
+- [Community And Enterprise](#community-and-enterprise)
 - [Architecture Overview](#architecture-overview)
 - [Repository Layout](#repository-layout)
 - [Quick Start](#quick-start)
@@ -61,6 +62,19 @@ HyperTide governance covers changeset gates, approvals, promotion, asset locks, 
 
 These commands turn high-risk version operations from isolated client actions into verifiable, traceable, replayable server workflows.
 
+## Community And Enterprise
+
+HyperTide follows an Open Core model: the public repository contains the trusted asset-versioning core, and Enterprise extends it in a separate commercial distribution. Public builds do not depend on private repositories or private tokens.
+
+| Area | Community Edition | Enterprise |
+| --- | --- | --- |
+| Asset versioning | CAS storage, BLAKE3 hashes, branches, changesets, rollback, sync | Advanced deployment guidance and support |
+| CLI workflows | login, doctor, add, stage, submit, status, log, checkout, lock, sync | Managed rollout and organization policies |
+| Auth | API key and JWT flows | SSO/OIDC/SAML/SCIM and enterprise identity lifecycle |
+| Governance | locks, basic gates, witness, audit, replay, retention inspection | RBAC/ABAC, multi-tenant policy, compliance exports |
+| Witness and attestation | Community witness configuration and topology | Cloud KMS, hardware-backed attestation, cross-environment quorum policy |
+| Operations | Docker Compose, health checks, metrics, graceful shutdown, rate limiting | Commercial SLA, private deployment assistance, advanced observability |
+
 ## Architecture Overview
 
 HyperTide currently consists of two main Rust packages: `hypertide-server` and `hypertide-cli`.
@@ -110,7 +124,22 @@ cargo --version
 
 For container deployment, prepare Docker and Docker Compose. Server persistence, database, secrets, and smoke-test details are documented in `deploy/server/README.md`.
 
-### 2. Run Tests
+### 2. Start A Local Server
+
+For the fastest self-hosted trial, use the server deployment compose file:
+
+```powershell
+docker compose -f deploy/server/docker-compose.yml --env-file deploy/server/.env.example up -d --build
+```
+
+Then verify readiness:
+
+```powershell
+curl http://localhost:3000/health/live
+curl http://localhost:3000/metrics
+```
+
+### 3. Run Tests
 
 Full workspace verification:
 
@@ -124,7 +153,7 @@ CLI-only verification:
 cargo test -p hypertide-cli
 ```
 
-### 3. Inspect CLI Help
+### 4. Inspect CLI Help
 
 ```powershell
 cargo run -p hypertide-cli --bin ht -- --help
@@ -132,7 +161,7 @@ cargo run -p hypertide-cli --bin ht -- --help
 
 The maintained CLI implementation is in `crates/cli/src/main.rs`, and the workspace binary name is `ht`. Legacy root-level source is not the current CLI release entrypoint.
 
-### 4. Log In To A Server
+### 5. Log In To A Server
 
 ```powershell
 cargo run -p hypertide-cli --bin ht -- login `
@@ -154,6 +183,18 @@ cargo run -p hypertide-cli --bin ht -- login `
 ```
 
 Login writes `.hypertide/profile.json` in the current directory. Without `--api-key-direct`, the CLI exchanges and refreshes JWT tokens; if refresh fails, log in again.
+
+### 6. Complete The First Asset Loop
+
+```powershell
+New-Item -ItemType Directory -Force .\Content\Props
+Set-Content .\Content\Props\tree.txt "hello hypertide"
+cargo run -p hypertide-cli --bin ht -- sync --repo demo-repo --branch main
+cargo run -p hypertide-cli --bin ht -- add --file .\Content\Props\tree.txt --path Content/Props/tree.txt --branch main
+cargo run -p hypertide-cli --bin ht -- status
+cargo run -p hypertide-cli --bin ht -- submit --repo demo-repo --branch main --message "add tree asset"
+cargo run -p hypertide-cli --bin ht -- log --repo demo-repo --branch main
+```
 
 ## CLI Workflows
 
@@ -183,7 +224,7 @@ chunk-upload
 
 1. `login` stores server URL, credentials, default repo, and default branch.
 2. `sync` updates branch metadata and base changeset without writing asset files.
-3. `checkout` materializes server assets into the current working directory.
+3. `checkout` materializes server assets into the current working directory; use `--dry-run` to preview writes first.
 4. `add` uploads local files and writes `.hypertide/stage.json`.
 5. `status` and `diff` inspect local, staged, base, and lock state.
 6. `submit` creates a formal changeset and clears the submitted stage.
@@ -192,6 +233,7 @@ Example:
 
 ```powershell
 cargo run -p hypertide-cli --bin ht -- sync --repo demo-repo --branch main
+cargo run -p hypertide-cli --bin ht -- checkout --repo demo-repo --branch main --dry-run
 cargo run -p hypertide-cli --bin ht -- checkout --repo demo-repo --branch main
 cargo run -p hypertide-cli --bin ht -- add `
   --file .\Content\Props\tree.uasset `
@@ -298,19 +340,20 @@ powershell -ExecutionPolicy Bypass -File .\deploy\server\smoke.ps1
 ## Documentation Index
 
 - [README_CN.md](README_CN.md): Chinese project overview.
+- [ROADMAP.md](ROADMAP.md): public release and product roadmap.
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): community participation standards.
+- [docs/architecture.md](docs/architecture.md): server, CLI, open-core, and operational architecture.
 - [docs/cli/README.md](docs/cli/README.md): CLI usage, command examples, and common flows.
 - [deploy/README.md](deploy/README.md): deployment entrypoint overview.
 - [deploy/server/README.md](deploy/server/README.md): server container deployment.
 - [deploy/cli/README.md](deploy/cli/README.md): CLI packaging.
 - [deploy/ubuntu-server-windows-cli.md](deploy/ubuntu-server-windows-cli.md): Ubuntu server and Windows CLI walkthrough.
-- [CONTRIBUTING.md](CONTRIBUTING.md): current contribution model.
+- [CONTRIBUTING.md](CONTRIBUTING.md): open source contribution workflow.
 - [SECURITY.md](SECURITY.md): security reporting path.
 
 ## Contribution Model
 
-This repository is currently coordinated directly by the maintainers. The default flow is to create a branch from `main`, make focused changes, update matching docs and validation, then merge through a GitHub pull request into `main`.
-
-Before pushing directly to main, make sure local `main` is safely integrated with `origin/main` and avoid force pushes.
+This repository accepts community issues and pull requests. The default flow is to create a branch from `main`, make focused changes, update matching docs and validation, then open a GitHub pull request into `main`.
 
 Minimum expectations:
 
@@ -318,6 +361,7 @@ Minimum expectations:
 - Behavior changes include documentation updates.
 - Relevant tests are run before submission, or skipped checks are explained.
 - Generated files, secrets, local runtime state, and large temporary files are not committed.
+- Public workspace builds remain independent from private Enterprise repositories.
 
 ## Security And Licensing
 

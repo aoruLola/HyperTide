@@ -13,6 +13,7 @@ pub(crate) mod login;
 pub(crate) mod remove;
 pub(crate) mod rollback;
 pub(crate) mod save;
+pub(crate) mod server;
 pub(crate) mod stage;
 pub(crate) mod status;
 pub(crate) mod submit;

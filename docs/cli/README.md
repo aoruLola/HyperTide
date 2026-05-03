@@ -90,6 +90,7 @@ cargo run -p hypertide-cli --bin ht -- checkout --repo demo-repo --branch main
 ```
 
 如果需要检出到某个特定的 changeset，可以加上 `--to <changeset-id>`。
+如果想先预览会写入哪些文件，可以加上 `--dry-run`；如果本地有未暂存改动，默认检出会拒绝覆盖，只有显式 `--force` 才会覆盖。
 
 `checkout` 会读取服务端快照，把 blob materialize 到当前目录，并更新 `.hypertide/workspace.json`。检出时会优先命中 `.hypertide/cache/objects/<hash>` 本地缓存；缓存未命中时再调用下载接口。
 
@@ -160,6 +161,15 @@ cargo run -p hypertide-cli --bin ht -- checkpoint create --repo demo-repo --bran
 cargo run -p hypertide-cli --bin ht -- checkpoint list
 cargo run -p hypertide-cli --bin ht -- checkpoint restore --id <checkpoint-id>
 cargo run -p hypertide-cli --bin ht -- checkpoint branch --id <checkpoint-id> --name try/alt-plan
+```
+
+## Server Operations
+
+Validate a production server environment file before starting a self-hosted deployment:
+
+```bash
+cargo run -p hypertide-cli --bin ht -- server doctor --env-file deploy/server/.env.production
+cargo run -p hypertide-cli --bin ht -- server doctor --env-file deploy/server/.env.production --server-url https://hypertide.example.com
 ```
 
 从 checkpoint 提交候选版本：
@@ -374,6 +384,7 @@ cargo run -p hypertide-cli --bin ht -- sync --repo demo-repo --branch main
 
 ```powershell
 cargo run -p hypertide-cli --bin ht -- checkout --repo demo-repo --branch main
+cargo run -p hypertide-cli --bin ht -- checkout --repo demo-repo --branch main --dry-run
 ```
 
 ### `status`

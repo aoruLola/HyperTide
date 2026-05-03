@@ -1,8 +1,10 @@
 use axum::http::HeaderValue;
+use std::path::Path;
 
 const DEV_MASTER_KEY: &str = "dev-master-key";
 const DEV_HIGH_RISK_SIGNING_SECRET: &str = "hypertide-dev-signing-secret";
 const DEV_AUTH_PEPPER: &str = "hypertide-dev-pepper";
+const DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE: u64 = 600;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppEnv {
@@ -33,12 +35,37 @@ impl AppEnv {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogFormat {
+    Plain,
+    Json,
+}
+
+impl LogFormat {
+    fn from_str(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "plain" | "text" => Ok(Self::Plain),
+            "json" => Ok(Self::Json),
+            _ => Err(format!("invalid LOG_FORMAT: {value} (expected plain|json)")),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Json => "json",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub app_env: AppEnv,
     pub master_key: String,
     pub storage_path: String,
     pub cors_allowed_origins: Vec<HeaderValue>,
+    pub rate_limit_requests_per_minute: u64,
+    pub log_format: LogFormat,
 }
 
 impl AppConfig {
@@ -80,11 +107,28 @@ impl AppConfig {
             enforce_production_security_gate(&lookup)?;
         }
 
+        let rate_limit_requests_per_minute = parse_u64(
+            lookup("RATE_LIMIT_REQUESTS_PER_MINUTE").as_deref(),
+            DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE,
+            "RATE_LIMIT_REQUESTS_PER_MINUTE",
+        )?;
+        let default_log_format = if app_env.is_production() {
+            LogFormat::Json
+        } else {
+            LogFormat::Plain
+        };
+        let log_format = match lookup("LOG_FORMAT") {
+            Some(value) if !value.trim().is_empty() => LogFormat::from_str(&value)?,
+            _ => default_log_format,
+        };
+
         Ok(Self {
             app_env,
             master_key,
             storage_path,
             cors_allowed_origins,
+            rate_limit_requests_per_minute,
+            log_format,
         })
     }
 }
@@ -118,6 +162,19 @@ fn parse_bool(raw: Option<String>) -> Result<bool, String> {
     }
 }
 
+fn parse_u64(raw: Option<&str>, default: u64, name: &str) -> Result<u64, String> {
+    let Some(raw_value) = raw else {
+        return Ok(default);
+    };
+    let trimmed = raw_value.trim();
+    if trimmed.is_empty() {
+        return Ok(default);
+    }
+    trimmed
+        .parse::<u64>()
+        .map_err(|_| format!("invalid {name}: {raw_value} (expected unsigned integer)"))
+}
+
 fn enforce_production_security_gate<F>(lookup: &F) -> Result<(), String>
 where
     F: Fn(&str) -> Option<String>,
@@ -143,11 +200,40 @@ where
         return Err("AUTH_PEPPER must not use development default".to_string());
     }
 
+    for key_path_name in ["JWT_PRIVATE_KEY_PATH", "JWT_PUBLIC_KEY_PATH"] {
+        let key_path = lookup(key_path_name)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("{key_path_name} is required in production"))?;
+        if !Path::new(&key_path).is_file() {
+            return Err(format!(
+                "{key_path_name} must point to an existing key file"
+            ));
+        }
+    }
+
+    let witness_config_json = lookup("WITNESS_CONFIG_JSON")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let witness_config_file = lookup("WITNESS_CONFIG_FILE")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
     let witness_keys = lookup("WITNESS_KEYS")
         .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "WITNESS_KEYS is required in production".to_string())?;
-    if witness_keys.contains("dev-secret-") {
+        .filter(|value| !value.is_empty());
+    if witness_config_json.is_none() && witness_config_file.is_none() && witness_keys.is_none() {
+        return Err(
+            "WITNESS_CONFIG_JSON, WITNESS_CONFIG_FILE, or WITNESS_KEYS is required in production"
+                .to_string(),
+        );
+    }
+    if witness_keys
+        .as_deref()
+        .is_some_and(|keys| keys.contains("dev-secret-"))
+        || witness_config_json
+            .as_deref()
+            .is_some_and(|json| json.contains("dev-secret-"))
+    {
         return Err("WITNESS_KEYS must not contain development secrets".to_string());
     }
 
@@ -158,7 +244,12 @@ where
 mod tests {
     use std::collections::HashMap;
 
-    use super::{AppConfig, AppEnv};
+    use super::{AppConfig, AppEnv, LogFormat};
+
+    fn insert_test_key_paths(env: &mut HashMap<String, String>) {
+        env.insert("JWT_PRIVATE_KEY_PATH".to_string(), "Cargo.toml".to_string());
+        env.insert("JWT_PUBLIC_KEY_PATH".to_string(), "Cargo.toml".to_string());
+    }
 
     #[test]
     fn defaults_to_development_mode() {
@@ -166,6 +257,7 @@ mod tests {
         assert_eq!(cfg.app_env, AppEnv::Development);
         assert_eq!(cfg.master_key, "dev-master-key");
         assert!(cfg.cors_allowed_origins.is_empty());
+        assert_eq!(cfg.log_format, LogFormat::Plain);
     }
 
     #[test]
@@ -203,6 +295,7 @@ mod tests {
             "secure-signing-secret".to_string(),
         );
         env.insert("AUTH_PEPPER".to_string(), "secure-pepper".to_string());
+        insert_test_key_paths(&mut env);
         env.insert(
             "WITNESS_KEYS".to_string(),
             "w1:prod-secret-1:region-a,w2:prod-secret-2:region-b".to_string(),
@@ -211,5 +304,61 @@ mod tests {
         let cfg = AppConfig::from_lookup(|name| env.get(name).cloned()).expect("config");
         assert_eq!(cfg.app_env, AppEnv::Production);
         assert_eq!(cfg.cors_allowed_origins.len(), 1);
+    }
+
+    #[test]
+    fn production_accepts_structured_witness_config() {
+        let mut env = HashMap::new();
+        env.insert("APP_ENV".to_string(), "production".to_string());
+        env.insert("MASTER_KEY".to_string(), "secure-master-key".to_string());
+        env.insert(
+            "CORS_ALLOWED_ORIGINS".to_string(),
+            "https://hypertide.example.com".to_string(),
+        );
+        env.insert(
+            "HIGH_RISK_SIGNATURE_REQUIRED".to_string(),
+            "true".to_string(),
+        );
+        env.insert(
+            "HIGH_RISK_SIGNING_SECRET".to_string(),
+            "secure-signing-secret".to_string(),
+        );
+        env.insert("AUTH_PEPPER".to_string(), "secure-pepper".to_string());
+        insert_test_key_paths(&mut env);
+        env.insert(
+            "WITNESS_CONFIG_JSON".to_string(),
+            r#"{"witnesses":[{"id":"w1","secret":"prod-secret-1","scope":"region-a","environment":"studio-a"},{"id":"w2","secret":"prod-secret-2","scope":"region-b","environment":"studio-b"}],"quorum":2,"scope":"cross-env"}"#.to_string(),
+        );
+
+        let cfg = AppConfig::from_lookup(|name| env.get(name).cloned()).expect("config");
+        assert_eq!(cfg.app_env, AppEnv::Production);
+    }
+
+    #[test]
+    fn production_defaults_to_json_logs() {
+        let mut env = HashMap::new();
+        env.insert("APP_ENV".to_string(), "production".to_string());
+        env.insert("MASTER_KEY".to_string(), "secure-master-key".to_string());
+        env.insert(
+            "CORS_ALLOWED_ORIGINS".to_string(),
+            "https://hypertide.example.com".to_string(),
+        );
+        env.insert(
+            "HIGH_RISK_SIGNATURE_REQUIRED".to_string(),
+            "true".to_string(),
+        );
+        env.insert(
+            "HIGH_RISK_SIGNING_SECRET".to_string(),
+            "secure-signing-secret".to_string(),
+        );
+        env.insert("AUTH_PEPPER".to_string(), "secure-pepper".to_string());
+        insert_test_key_paths(&mut env);
+        env.insert(
+            "WITNESS_KEYS".to_string(),
+            "w1:prod-secret-1:region-a,w2:prod-secret-2:region-b".to_string(),
+        );
+
+        let cfg = AppConfig::from_lookup(|name| env.get(name).cloned()).expect("config");
+        assert_eq!(cfg.log_format, LogFormat::Json);
     }
 }

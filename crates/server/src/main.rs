@@ -4,13 +4,22 @@ mod api;
 mod core;
 
 use axum::{
-    extract::{DefaultBodyLimit, FromRef, State},
-    http::StatusCode,
+    body::Body,
+    extract::{DefaultBodyLimit, FromRef, MatchedPath, State},
+    http::{HeaderValue, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
     Router,
 };
+use dashmap::DashMap;
 use sqlx::PgPool;
 use std::net::SocketAddr;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
+use std::time::{Duration, Instant};
 use tower_http::{
     cors::{Any, CorsLayer},
     limit::RequestBodyLimitLayer,
@@ -42,7 +51,7 @@ use crate::core::audit_chain::AuditChain;
 use crate::core::auth::AuthManager;
 use crate::core::checkpoint::CheckpointService;
 use crate::core::compliance::RetentionPolicy;
-use crate::core::config::{AppConfig, AppEnv};
+use crate::core::config::{AppConfig, AppEnv, LogFormat};
 use crate::core::db::{migrations::run_migrations, pool::init_pg_pool_from_env};
 use crate::core::events::EventStore;
 use crate::core::high_risk::HighRiskGuard;
@@ -56,6 +65,7 @@ use crate::core::witness::WitnessService;
 const VERSION: &str = "Surface 26.0.1 Preview";
 const DEFAULT_BODY_LIMIT_BYTES: usize = 2 * 1024 * 1024;
 const UPLOAD_BODY_LIMIT_BYTES: usize = 256 * 1024 * 1024;
+const LATENCY_BUCKETS_SECONDS: &[f64] = &[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0];
 
 fn print_banner(env: AppEnv) {
     println!();
@@ -81,6 +91,254 @@ pub struct AppState {
     pub replay_service: Option<ReplayService>,
     pub retention_policy: RetentionPolicy,
     pub db_pool: Option<PgPool>,
+    pub metrics: HttpMetrics,
+    pub rate_limiter: RateLimiter,
+}
+
+#[derive(Clone, Default)]
+pub struct HttpMetrics {
+    requests_total: Arc<AtomicU64>,
+    responses_2xx: Arc<AtomicU64>,
+    responses_3xx: Arc<AtomicU64>,
+    responses_4xx: Arc<AtomicU64>,
+    responses_5xx: Arc<AtomicU64>,
+    rate_limit_rejects: Arc<AtomicU64>,
+    requests_by_label: Arc<DashMap<String, AtomicU64>>,
+    latency_buckets_by_label: Arc<DashMap<String, AtomicU64>>,
+    business_events_by_label: Arc<DashMap<String, AtomicU64>>,
+}
+
+impl HttpMetrics {
+    fn record(&self, method: &str, route: &str, status: StatusCode, latency: Duration) {
+        self.requests_total.fetch_add(1, Ordering::Relaxed);
+        let counter = match status.as_u16() {
+            200..=299 => &self.responses_2xx,
+            300..=399 => &self.responses_3xx,
+            400..=499 => &self.responses_4xx,
+            _ => &self.responses_5xx,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+
+        let status = status.as_u16().to_string();
+        self.increment(
+            &self.requests_by_label,
+            format!(
+                "method=\"{}\",route=\"{}\",status=\"{}\"",
+                escape_label_value(method),
+                escape_label_value(route),
+                status
+            ),
+        );
+
+        let elapsed = latency.as_secs_f64();
+        for bucket in LATENCY_BUCKETS_SECONDS {
+            if elapsed <= *bucket {
+                self.increment(
+                    &self.latency_buckets_by_label,
+                    format!(
+                        "method=\"{}\",route=\"{}\",le=\"{}\"",
+                        escape_label_value(method),
+                        escape_label_value(route),
+                        bucket
+                    ),
+                );
+            }
+        }
+        self.increment(
+            &self.latency_buckets_by_label,
+            format!(
+                "method=\"{}\",route=\"{}\",le=\"+Inf\"",
+                escape_label_value(method),
+                escape_label_value(route),
+            ),
+        );
+        self.record_business_events(route, status.as_str());
+    }
+
+    fn record_rate_limited(&self) {
+        self.rate_limit_rejects.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn increment(&self, map: &DashMap<String, AtomicU64>, labels: String) {
+        map.entry(labels)
+            .or_insert_with(|| AtomicU64::new(0))
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_business_events(&self, route: &str, status: &str) {
+        let mut events = Vec::new();
+
+        if status == "401" {
+            events.push("auth_failure");
+        }
+        if route == "/health/ready" && status == "503" {
+            events.push("db_readiness_failure");
+        }
+        if (route.starts_with("/v2/storage") || route.starts_with("/v2/blobs"))
+            && status.starts_with('5')
+        {
+            events.push("storage_error");
+        }
+        match route {
+            "/v2/locks/acquire" => events.push("lock_acquire"),
+            "/v2/locks/release" => events.push("lock_release"),
+            "/v2/locks/renew" => events.push("lock_renew"),
+            "/v2/locks/force-release" => events.push("lock_force_release"),
+            "/v2/changesets" => events.push("submit"),
+            _ => {}
+        }
+        if route.contains("checkpoints") {
+            events.push("checkpoint");
+        }
+        if route.contains("/witness/") {
+            events.push("witness");
+        }
+        if route.contains("/audit/") {
+            events.push("audit");
+        }
+        if route.contains("/replay/") {
+            events.push("replay");
+        }
+
+        for event in events {
+            self.increment(
+                &self.business_events_by_label,
+                format!(
+                    "event=\"{}\",status=\"{}\"",
+                    escape_label_value(event),
+                    escape_label_value(status)
+                ),
+            );
+        }
+    }
+
+    fn render_prometheus(&self) -> String {
+        let mut output = format!(
+            concat!(
+                "# HELP hypertide_http_requests_total Total HTTP requests handled by HyperTide.\n",
+                "# TYPE hypertide_http_requests_total counter\n",
+                "hypertide_http_requests_total {}\n",
+                "# HELP hypertide_http_responses_total HTTP responses by status class.\n",
+                "# TYPE hypertide_http_responses_total counter\n",
+                "hypertide_http_responses_total{{status_class=\"2xx\"}} {}\n",
+                "hypertide_http_responses_total{{status_class=\"3xx\"}} {}\n",
+                "hypertide_http_responses_total{{status_class=\"4xx\"}} {}\n",
+                "hypertide_http_responses_total{{status_class=\"5xx\"}} {}\n",
+                "# HELP hypertide_rate_limit_rejects_total HTTP requests rejected by rate limiting.\n",
+                "# TYPE hypertide_rate_limit_rejects_total counter\n",
+                "hypertide_rate_limit_rejects_total {}\n",
+            ),
+            self.requests_total.load(Ordering::Relaxed),
+            self.responses_2xx.load(Ordering::Relaxed),
+            self.responses_3xx.load(Ordering::Relaxed),
+            self.responses_4xx.load(Ordering::Relaxed),
+            self.responses_5xx.load(Ordering::Relaxed),
+            self.rate_limit_rejects.load(Ordering::Relaxed),
+        );
+
+        let mut request_lines = self
+            .requests_by_label
+            .iter()
+            .map(|entry| {
+                format!(
+                    "hypertide_http_requests_total{{{}}} {}\n",
+                    entry.key(),
+                    entry.value().load(Ordering::Relaxed)
+                )
+            })
+            .collect::<Vec<_>>();
+        request_lines.sort();
+        output.push_str(&request_lines.concat());
+
+        output.push_str(
+            "# HELP hypertide_http_request_duration_seconds HTTP request latency histogram.\n",
+        );
+        output.push_str("# TYPE hypertide_http_request_duration_seconds histogram\n");
+        let mut latency_lines = self
+            .latency_buckets_by_label
+            .iter()
+            .map(|entry| {
+                format!(
+                    "hypertide_http_request_duration_seconds_bucket{{{}}} {}\n",
+                    entry.key(),
+                    entry.value().load(Ordering::Relaxed)
+                )
+            })
+            .collect::<Vec<_>>();
+        latency_lines.sort();
+        output.push_str(&latency_lines.concat());
+        output.push_str("# HELP hypertide_business_events_total Business-domain operations and notable failures by event and status.\n");
+        output.push_str("# TYPE hypertide_business_events_total counter\n");
+        let mut business_lines = self
+            .business_events_by_label
+            .iter()
+            .map(|entry| {
+                format!(
+                    "hypertide_business_events_total{{{}}} {}\n",
+                    entry.key(),
+                    entry.value().load(Ordering::Relaxed)
+                )
+            })
+            .collect::<Vec<_>>();
+        business_lines.sort();
+        output.push_str(&business_lines.concat());
+        output
+    }
+}
+
+#[derive(Clone)]
+pub struct RateLimiter {
+    max_requests_per_minute: u64,
+    buckets: Arc<DashMap<String, Mutex<RateLimitWindow>>>,
+}
+
+struct RateLimitWindow {
+    started_at: Instant,
+    used: u64,
+}
+
+impl RateLimiter {
+    fn new(max_requests_per_minute: u64) -> Self {
+        Self {
+            max_requests_per_minute,
+            buckets: Arc::new(DashMap::new()),
+        }
+    }
+
+    fn allow(&self, bucket: &str) -> bool {
+        if self.max_requests_per_minute == 0 {
+            return true;
+        }
+        let entry = self.buckets.entry(bucket.to_string()).or_insert_with(|| {
+            Mutex::new(RateLimitWindow {
+                started_at: Instant::now(),
+                used: 0,
+            })
+        });
+        let mut window = entry.lock().expect("rate limit mutex poisoned");
+        if window.started_at.elapsed() >= Duration::from_secs(60) {
+            window.started_at = Instant::now();
+            window.used = 0;
+        }
+        if window.used >= self.max_requests_per_minute {
+            return false;
+        }
+        window.used += 1;
+        true
+    }
+}
+
+#[derive(Clone)]
+struct RateLimitState {
+    limiter: RateLimiter,
+    metrics: HttpMetrics,
+}
+
+fn escape_label_value(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
 }
 
 impl FromRef<AppState> for LockManager {
@@ -129,6 +387,12 @@ fn build_cors_layer(config: &AppConfig) -> CorsLayer {
 
 fn build_app(state: AppState, config: &AppConfig) -> Router {
     let cors = build_cors_layer(config);
+    let metrics = state.metrics.clone();
+    let rate_limiter = RateLimiter::new(config.rate_limit_requests_per_minute);
+    let rate_limit_state = RateLimitState {
+        limiter: rate_limiter,
+        metrics: metrics.clone(),
+    };
 
     let general_routes = Router::new()
         .route("/", get(root))
@@ -203,6 +467,12 @@ fn build_app(state: AppState, config: &AppConfig) -> Router {
     Router::new()
         .merge(general_routes)
         .merge(upload_routes)
+        .route("/metrics", get(metrics_handler))
+        .layer(middleware::from_fn_with_state(metrics, record_metrics))
+        .layer(middleware::from_fn_with_state(
+            rate_limit_state,
+            enforce_rate_limit,
+        ))
         .layer(cors)
         .with_state(state)
 }
@@ -215,37 +485,54 @@ async fn main() {
         Ok(config) => config,
         Err(error) => {
             eprintln!("Configuration error: {error}");
-            return;
+            std::process::exit(1);
         }
     };
     print_banner(config.app_env);
 
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG")
-                .unwrap_or_else(|_| "hypertide_cli=info,hypertide=info,tower_http=debug".into()),
-        ))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    let log_filter = tracing_subscriber::EnvFilter::new(
+        std::env::var("RUST_LOG")
+            .unwrap_or_else(|_| "hypertide_cli=info,hypertide=info,tower_http=debug".into()),
+    );
+    if config.log_format == LogFormat::Json {
+        tracing_subscriber::registry()
+            .with(log_filter)
+            .with(tracing_subscriber::fmt::layer().json())
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(log_filter)
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+    }
+
+    tracing::info!(
+        app_env = config.app_env.as_str(),
+        storage_path = %config.storage_path,
+        cors_allowed_origins = config.cors_allowed_origins.len(),
+        rate_limit_requests_per_minute = config.rate_limit_requests_per_minute,
+        log_format = config.log_format.as_str(),
+        "Effective server configuration loaded"
+    );
 
     let db_pool = match init_pg_pool_from_env().await {
         Ok(pool) => pool,
         Err(e) => {
             tracing::error!("Failed to initialize postgres pool: {e}");
-            return;
+            std::process::exit(1);
         }
     };
 
     if let Err(e) = run_migrations(&db_pool).await {
         tracing::error!("Failed to run database migrations: {e}");
-        return;
+        std::process::exit(1);
     }
     tracing::info!("Database ready (pool + migrations)");
 
     let storage_manager = StorageManager::new(&config.storage_path);
     if let Err(e) = storage_manager.init().await {
         tracing::error!("Failed to initialize storage: {}", e);
-        return;
+        std::process::exit(1);
     }
     tracing::info!("Storage initialized at {}", &config.storage_path);
 
@@ -254,14 +541,14 @@ async fn main() {
             Ok(manager) => manager,
             Err(e) => {
                 tracing::error!("Failed to initialize auth manager: {e}");
-                return;
+                std::process::exit(1);
             }
         };
     let lock_manager = match LockManager::with_pg(db_pool.clone()).await {
         Ok(manager) => manager,
         Err(e) => {
             tracing::error!("Failed to initialize lock manager: {e}");
-            return;
+            std::process::exit(1);
         }
     };
 
@@ -269,14 +556,14 @@ async fn main() {
         Ok(manager) => manager,
         Err(e) => {
             tracing::error!("Failed to initialize version manager: {e}");
-            return;
+            std::process::exit(1);
         }
     };
     let session_manager = match SessionManager::with_pg(db_pool.clone()).await {
         Ok(manager) => manager,
         Err(e) => {
             tracing::error!("Failed to initialize session manager: {e}");
-            return;
+            std::process::exit(1);
         }
     };
 
@@ -294,6 +581,8 @@ async fn main() {
         replay_service: Some(ReplayService::new(db_pool.clone())),
         retention_policy: RetentionPolicy::from_env(),
         db_pool: Some(db_pool),
+        metrics: HttpMetrics::default(),
+        rate_limiter: RateLimiter::new(config.rate_limit_requests_per_minute),
     };
 
     let app = build_app(state, &config);
@@ -305,12 +594,16 @@ async fn main() {
         Ok(listener) => listener,
         Err(e) => {
             tracing::error!("Failed to bind address: {e}");
-            return;
+            std::process::exit(1);
         }
     };
 
-    if let Err(e) = axum::serve(listener, app).await {
+    if let Err(e) = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+    {
         tracing::error!("Server exited with error: {e}");
+        std::process::exit(1);
     }
 }
 
@@ -322,10 +615,130 @@ async fn health_live() -> &'static str {
     "OK"
 }
 
+async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
+        state.metrics.render_prometheus(),
+    )
+}
+
+async fn record_metrics(
+    State(metrics): State<HttpMetrics>,
+    request: axum::http::Request<Body>,
+    next: Next,
+) -> Response {
+    let method = request.method().as_str().to_string();
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|matched| matched.as_str().to_string())
+        .unwrap_or_else(|| request.uri().path().to_string());
+    let request_id = request
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty())
+        .and_then(|value| HeaderValue::from_str(value).ok())
+        .unwrap_or_else(|| HeaderValue::from_str(&uuid::Uuid::new_v4().to_string()).unwrap());
+    let started_at = Instant::now();
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert("x-request-id", request_id.clone());
+    metrics.record(&method, &route, response.status(), started_at.elapsed());
+    response
+}
+
+async fn enforce_rate_limit(
+    State(rate_limit): State<RateLimitState>,
+    request: axum::http::Request<Body>,
+    next: Next,
+) -> Response {
+    let bucket = rate_limit_bucket(&request);
+    if !rate_limit.limiter.allow(&bucket) {
+        rate_limit.metrics.record_rate_limited();
+        return (StatusCode::TOO_MANY_REQUESTS, "RATE_LIMITED").into_response();
+    }
+    next.run(request).await
+}
+
+fn rate_limit_bucket(request: &axum::http::Request<Body>) -> String {
+    if let Some(value) = request
+        .headers()
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty())
+    {
+        return format!("api-key:{}", value);
+    }
+    if let Some(value) = request
+        .headers()
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty())
+    {
+        return format!("authorization:{}", value);
+    }
+    if let Some(value) = request
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return format!("ip:{}", value);
+    }
+    if let Some(value) = request
+        .headers()
+        .get("x-real-ip")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty())
+    {
+        return format!("ip:{}", value);
+    }
+    "global".to_string()
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(error) = tokio::signal::ctrl_c().await {
+            tracing::error!("Failed to install CTRL+C handler: {error}");
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(error) => {
+                tracing::error!("Failed to install SIGTERM handler: {error}");
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+
+    tracing::info!("Shutdown signal received; draining server");
+}
+
 async fn health_ready(State(state): State<AppState>) -> (StatusCode, &'static str) {
     let Some(pool) = state.db_pool.as_ref() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "DB_NOT_CONFIGURED");
     };
+
+    if let Err(error) = state.storage_manager.health_check().await {
+        tracing::warn!(error = %error, "Storage readiness check failed");
+        return (StatusCode::SERVICE_UNAVAILABLE, "STORAGE_UNAVAILABLE");
+    }
 
     match sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(pool)
@@ -360,6 +773,15 @@ mod tests {
             master_key: test_master_key().to_string(),
             storage_path: "./storage".to_string(),
             cors_allowed_origins: Vec::<HeaderValue>::new(),
+            rate_limit_requests_per_minute: 600,
+            log_format: LogFormat::Plain,
+        }
+    }
+
+    fn test_config_with_rate_limit(limit: u64) -> AppConfig {
+        AppConfig {
+            rate_limit_requests_per_minute: limit,
+            ..test_config()
         }
     }
 
@@ -378,6 +800,8 @@ mod tests {
             replay_service: None,
             retention_policy: RetentionPolicy::from_env(),
             db_pool: None,
+            metrics: HttpMetrics::default(),
+            rate_limiter: RateLimiter::new(600),
         }
     }
 
@@ -660,6 +1084,108 @@ mod tests {
 
         let response = app.oneshot(request).await.expect("response");
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn metrics_route_exposes_prometheus_counters() {
+        let app = build_app(test_state(), &test_config());
+
+        let health_request = Request::builder()
+            .uri("/health/live")
+            .body(Body::empty())
+            .expect("health request");
+        let health_response = app
+            .clone()
+            .oneshot(health_request)
+            .await
+            .expect("health response");
+        assert_eq!(health_response.status(), StatusCode::OK);
+        assert!(health_response.headers().contains_key("x-request-id"));
+
+        let ready_request = Request::builder()
+            .uri("/health/ready")
+            .body(Body::empty())
+            .expect("ready request");
+        let ready_response = app
+            .clone()
+            .oneshot(ready_request)
+            .await
+            .expect("ready response");
+        assert_eq!(ready_response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let metrics_request = Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
+            .expect("metrics request");
+        let metrics_response = app
+            .oneshot(metrics_request)
+            .await
+            .expect("metrics response");
+        assert_eq!(metrics_response.status(), StatusCode::OK);
+
+        let body = to_bytes(metrics_response.into_body(), usize::MAX)
+            .await
+            .expect("metrics body");
+        let text = String::from_utf8(body.to_vec()).expect("utf8 metrics");
+        assert!(text.contains("hypertide_http_requests_total 2"));
+        assert!(text.contains("hypertide_http_responses_total{status_class=\"2xx\"} 1"));
+        assert!(text.contains(
+            "hypertide_http_requests_total{method=\"GET\",route=\"/health/live\",status=\"200\"} 1"
+        ));
+        assert!(text.contains(
+            "hypertide_http_request_duration_seconds_bucket{method=\"GET\",route=\"/health/live\",le=\"+Inf\"} 1"
+        ));
+        assert!(text.contains(
+            "hypertide_business_events_total{event=\"db_readiness_failure\",status=\"503\"} 1"
+        ));
+    }
+
+    #[tokio::test]
+    async fn rate_limit_returns_429_when_window_is_exhausted() {
+        let app = build_app(test_state(), &test_config_with_rate_limit(1));
+
+        let first = Request::builder()
+            .uri("/health/live")
+            .body(Body::empty())
+            .expect("first request");
+        let first_response = app.clone().oneshot(first).await.expect("first response");
+        assert_eq!(first_response.status(), StatusCode::OK);
+
+        let second = Request::builder()
+            .uri("/health/live")
+            .body(Body::empty())
+            .expect("second request");
+        let second_response = app.oneshot(second).await.expect("second response");
+        assert_eq!(second_response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn rate_limit_is_bucketed_by_api_key() {
+        let app = build_app(test_state(), &test_config_with_rate_limit(1));
+
+        let first = Request::builder()
+            .uri("/health/live")
+            .header("X-API-Key", "key-a")
+            .body(Body::empty())
+            .expect("first request");
+        let first_response = app.clone().oneshot(first).await.expect("first response");
+        assert_eq!(first_response.status(), StatusCode::OK);
+
+        let second = Request::builder()
+            .uri("/health/live")
+            .header("X-API-Key", "key-a")
+            .body(Body::empty())
+            .expect("second request");
+        let second_response = app.clone().oneshot(second).await.expect("second response");
+        assert_eq!(second_response.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let other_key = Request::builder()
+            .uri("/health/live")
+            .header("X-API-Key", "key-b")
+            .body(Body::empty())
+            .expect("other key request");
+        let other_key_response = app.oneshot(other_key).await.expect("other key response");
+        assert_eq!(other_key_response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -1168,5 +1694,39 @@ mod tests {
             payload["data"]["environments"][1]["witness_ids"],
             serde_json::json!(["w2", "w3"])
         );
+    }
+
+    #[tokio::test]
+    async fn witness_topology_reads_structured_json_config() {
+        let _env = TestEnvGuard::set(&[(
+            "WITNESS_CONFIG_JSON",
+            r#"{"witnesses":[{"id":"w1","secret":"s1","scope":"primary","environment":"studio-a"},{"id":"w2","secret":"s2","scope":"backup","environment":"studio-b"}],"quorum":2,"scope":"cross-env"}"#,
+        )]);
+        let mut state = test_state();
+        state.witness_service = Some(WitnessService::from_env(test_pg_pool()));
+        let app = build_app(state, &test_config());
+
+        let request = Request::builder()
+            .uri("/v2/trust/witness/topology")
+            .header("X-API-Key", test_master_key())
+            .body(Body::empty())
+            .expect("request");
+
+        let response = app.oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(
+            payload["data"]["scope"],
+            Value::String("cross-env".to_string())
+        );
+        assert_eq!(
+            payload["data"]["witness_scopes"][0]["environment"],
+            Value::String("studio-a".to_string())
+        );
+        assert_eq!(payload["data"]["quorum"], Value::Number(2.into()));
     }
 }

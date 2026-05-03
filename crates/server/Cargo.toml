@@ -32,13 +32,11 @@ hmac.workspace = true
 sha2.workspace = true
 hex.workspace = true
 
-# Enterprise (optional, behind feature flag)
-hypertide-attestation = { git = "https://github.com/openLYURA/hypertide-enterprise.git", optional = true }
-hypertide-enterprise-auth = { git = "https://github.com/openLYURA/hypertide-enterprise.git", optional = true }
-hypertide-compliance = { git = "https://github.com/openLYURA/hypertide-enterprise.git", optional = true }
-
 [features]
-enterprise = ["hypertide-attestation", "hypertide-enterprise-auth", "hypertide-compliance"]
+# Public open-core builds keep this feature as a compatibility stub.
+# Commercial Enterprise crates live outside this public workspace and depend on
+# the OSS crates instead of making OSS builds depend on private repositories.
+enterprise = []
 
 [dev-dependencies]
 tower.workspace = true
