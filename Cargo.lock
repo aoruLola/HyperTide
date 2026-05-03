@@ -857,23 +857,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hypertide-attestation"
-version = "0.1.0"
-source = "git+https://github.com/openLYURA/hypertide-enterprise.git#c6585e133b9601dc8ee63364221ff70875365d18"
-dependencies = [
- "anyhow",
- "blake3",
- "chrono",
- "hex",
- "hmac",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "hypertide-cli"
 version = "0.1.0"
 dependencies = [
@@ -885,33 +868,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
-]
-
-[[package]]
-name = "hypertide-compliance"
-version = "0.1.0"
-source = "git+https://github.com/openLYURA/hypertide-enterprise.git#c6585e133b9601dc8ee63364221ff70875365d18"
-dependencies = [
- "anyhow",
- "blake3",
- "chrono",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "hypertide-enterprise-auth"
-version = "0.1.0"
-source = "git+https://github.com/openLYURA/hypertide-enterprise.git#c6585e133b9601dc8ee63364221ff70875365d18"
-dependencies = [
- "anyhow",
- "chrono",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -929,9 +885,6 @@ dependencies = [
  "dotenvy",
  "hex",
  "hmac",
- "hypertide-attestation",
- "hypertide-compliance",
- "hypertide-enterprise-auth",
  "jsonwebtoken",
  "reqwest",
  "serde",
@@ -2485,6 +2438,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-serde"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
+dependencies = [
+ "serde",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2494,12 +2457,15 @@ dependencies = [
  "nu-ansi-term",
  "once_cell",
  "regex-automata",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]

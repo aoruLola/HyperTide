@@ -1,0 +1,40 @@
+{
+  "title": "HyperTide Self-Hosted Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "HTTP Requests",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        { "expr": "sum(rate(hypertide_http_requests_total[5m]))", "legendFormat": "req/s" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP Status Classes",
+      "gridPos": { "x": 6, "y": 0, "w": 9, "h": 7 },
+      "targets": [
+        { "expr": "sum by (status_class) (rate(hypertide_http_responses_total[5m]))", "legendFormat": "{{status_class}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Latency Buckets",
+      "gridPos": { "x": 0, "y": 7, "w": 15, "h": 7 },
+      "targets": [
+        { "expr": "sum by (route, le) (rate(hypertide_http_request_duration_seconds_bucket[5m]))", "legendFormat": "{{route}} {{le}}" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Rate Limit Rejects",
+      "gridPos": { "x": 15, "y": 0, "w": 5, "h": 4 },
+      "targets": [
+        { "expr": "sum(rate(hypertide_rate_limit_rejects_total[5m]))", "legendFormat": "rejects/s" }
+      ]
+    }
+  ]
+}

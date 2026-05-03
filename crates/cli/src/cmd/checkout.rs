@@ -18,6 +18,8 @@ pub(crate) struct CheckoutArgs {
     pub to_changeset_id: Option<String>,
     #[arg(long, help = "Force checkout, overwriting local modifications")]
     pub force: bool,
+    #[arg(long, help = "Preview checkout changes without writing files")]
+    pub dry_run: bool,
 }
 
 pub(crate) async fn execute(args: CheckoutArgs) -> Result<()> {
@@ -56,6 +58,22 @@ pub(crate) async fn execute(args: CheckoutArgs) -> Result<()> {
         args.to_changeset_id.as_deref(),
     )
     .await?;
+    if args.dry_run {
+        println!(
+            "checkout preview {}@{} to {} ({} assets)",
+            repo,
+            branch,
+            snapshot
+                .changeset_id
+                .clone()
+                .unwrap_or_else(|| "ROOT".to_string()),
+            snapshot.assets.len()
+        );
+        for asset in &snapshot.assets {
+            println!("  write {} <- {}", asset.path, asset.blob_hash);
+        }
+        return Ok(());
+    }
     let workspace_root = std::env::current_dir()?;
     let mut checked_out_assets = Vec::with_capacity(snapshot.assets.len());
 

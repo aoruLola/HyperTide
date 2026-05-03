@@ -2,14 +2,15 @@
 
 [English README](README.md)
 
-HyperTide 是一个面向大型二进制资产工作流的中心化协作与版本系统。它把版本真相、分支状态、锁、审批、审计和回放能力放在服务端，由 CLI 和后续 UI 提供面向工作区的操作体验。
+HyperTide Community Edition 是一个采用 Open Core 模式、可自托管的中心化二进制资产协作与版本系统。它把版本真相、分支状态、锁、审批、审计、witness 检查点和回放能力放在服务端，由 CLI 和后续 UI 提供面向工作区的操作体验。
 
-> 本项目基于 [MIT 许可证](LICENSE) 开源。
+> HyperTide Community Edition 基于 [MIT 许可证](LICENSE) 开源。HyperTide Enterprise 是独立的商业高级版本，基于公共扩展点提供企业身份、策略、合规、公证、治理和支持能力。
 
 ## 目录
 
 - [产品定位](#产品定位)
 - [核心能力](#核心能力)
+- [社区版与企业版](#社区版与企业版)
 - [架构概览](#架构概览)
 - [仓库结构](#仓库结构)
 - [快速开始](#快速开始)
@@ -60,6 +61,19 @@ CLI 在当前目录下使用 `.hypertide/` 保存本地状态，包括登录 pro
 HyperTide 的治理面覆盖 changeset gate、approve、promote、asset lock、trust checkpoint、witness attestation、audit verification、replay verification 和 retention policy 查询。
 
 这些命令用于把高风险版本操作从“单个客户端动作”提升为“可验证、可追踪、可回放”的服务端流程。
+
+## 社区版与企业版
+
+HyperTide 采用 Open Core 模式：公共仓库包含可信资产版本核心，Enterprise 在独立商业版本中扩展高级能力。公共构建不依赖私有仓库或私有 token。
+
+| 领域 | Community Edition | Enterprise |
+| --- | --- | --- |
+| 资产版本 | CAS 存储、BLAKE3 hash、分支、changeset、回滚、同步 | 高级部署指导与商业支持 |
+| CLI 工作流 | login、doctor、add、stage、submit、status、log、checkout、lock、sync | 组织级策略和托管式落地支持 |
+| 鉴权 | API key 与 JWT | SSO/OIDC/SAML/SCIM |
+| 治理 | 锁、基础 gate、witness、audit、replay、retention 查询 | RBAC/ABAC、多租户策略、合规导出 |
+| Witness 与 Attestation | 社区版 witness 配置与拓扑 | 云 KMS、硬件背书、公证 quorum 策略 |
+| 运维 | Docker Compose、health check、metrics、graceful shutdown、rate limit | SLA、私有部署协助、高级可观测性 |
 
 ## 架构概览
 
@@ -183,7 +197,7 @@ chunk-upload
 
 1. `login` 保存服务地址、凭据、默认 repo 和默认 branch。
 2. `sync` 同步 branch metadata 和 base changeset，不写入资产文件。
-3. `checkout` 从服务端 materialize 资产到当前工作目录。
+3. `checkout` 从服务端 materialize 资产到当前工作目录；可先用 `--dry-run` 预览写入。
 4. `add` 上传本地文件并写入 `.hypertide/stage.json`。
 5. `status` 和 `diff` 查看本地、stage、base 和 lock 状态。
 6. `submit` 创建正式 changeset，并清空已提交 stage。
@@ -192,6 +206,7 @@ chunk-upload
 
 ```powershell
 cargo run -p hypertide-cli --bin ht -- sync --repo demo-repo --branch main
+cargo run -p hypertide-cli --bin ht -- checkout --repo demo-repo --branch main --dry-run
 cargo run -p hypertide-cli --bin ht -- checkout --repo demo-repo --branch main
 cargo run -p hypertide-cli --bin ht -- add `
   --file .\Content\Props\tree.uasset `
@@ -298,19 +313,20 @@ powershell -ExecutionPolicy Bypass -File .\deploy\server\smoke.ps1
 ## 文档索引
 
 - [README.md](README.md): 英文项目总览。
+- [ROADMAP.md](ROADMAP.md): 公开发布与产品路线图。
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): 社区协作行为准则。
+- [docs/architecture.md](docs/architecture.md): Server、CLI、Open Core 和运维架构说明。
 - [docs/cli/README.md](docs/cli/README.md): CLI 使用说明、命令示例和常见流程。
 - [deploy/README.md](deploy/README.md): 部署入口总览。
 - [deploy/server/README.md](deploy/server/README.md): 服务端容器部署。
 - [deploy/cli/README.md](deploy/cli/README.md): CLI 打包。
 - [deploy/ubuntu-server-windows-cli.md](deploy/ubuntu-server-windows-cli.md): Ubuntu server 与 Windows CLI walkthrough。
-- [CONTRIBUTING.md](CONTRIBUTING.md): 当前协作模型。
+- [CONTRIBUTING.md](CONTRIBUTING.md): 开源贡献流程。
 - [SECURITY.md](SECURITY.md): 安全问题报告路径。
 
 ## 协作规则
 
-当前仓库由维护者直接协调。默认流程是从 `main` 创建分支，做聚焦改动，补充对应文档和验证，再通过 GitHub pull request 合入 `main`。
-
-在直接推主线前，需要确认本地 `main` 与 `origin/main` 已安全整合，并避免 force push。
+本仓库接受社区 issue 和 pull request。默认流程是从 `main` 创建分支，做聚焦改动，补充对应文档和验证，再通过 GitHub pull request 合入 `main`。
 
 最小提交预期：
 
@@ -318,6 +334,7 @@ powershell -ExecutionPolicy Bypass -File .\deploy\server\smoke.ps1
 - 行为变化附带文档更新。
 - 提交前运行相关测试或说明未运行原因。
 - 不提交生成文件、密钥、本地运行状态或大型临时文件。
+- 不把公共 workspace 重新耦合到私有 Enterprise 依赖。
 
 ## 安全与许可
 

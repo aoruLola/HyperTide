@@ -43,6 +43,11 @@ jobs:
       - name: Build CLI
         run: cargo build --release -p hypertide-cli --target ${{ matrix.target }}
 
+      - name: Dependency report
+        run: |
+          cargo tree --workspace --prefix none > dependency-tree.txt
+          cargo metadata --format-version 1 > dependency-metadata.json
+
       - name: Package (Unix)
         if: matrix.os != 'windows-latest'
         run: |
@@ -51,8 +56,10 @@ jobs:
           cp target/${{ matrix.target }}/release/ht dist/
           cp -r deploy dist/
           cp -r docs dist/
-          cp README.md CONTRIBUTING.md SECURITY.md dist/
+          cp README.md CONTRIBUTING.md SECURITY.md LICENSE dist/
+          cp dependency-tree.txt dependency-metadata.json dist/
           cd dist && tar czf ../${{ matrix.artifact }}.tar.gz .
+          shasum -a 256 ../${{ matrix.artifact }}.tar.gz > ../${{ matrix.artifact }}.tar.gz.sha256
 
       - name: Package (Windows)
         if: matrix.os == 'windows-latest'
@@ -62,14 +69,17 @@ jobs:
           cp target/${{ matrix.target }}/release/ht.exe dist/
           cp -r deploy dist/
           cp -r docs dist/
-          cp README.md CONTRIBUTING.md SECURITY.md dist/
+          cp README.md CONTRIBUTING.md SECURITY.md LICENSE dist/
+          cp dependency-tree.txt dependency-metadata.json dist/
           Compress-Archive -Path dist/* -DestinationPath ${{ matrix.artifact }}.zip
+          Get-FileHash ${{ matrix.artifact }}.zip -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  ${{ matrix.artifact }}.zip" } | Out-File -Encoding ascii ${{ matrix.artifact }}.zip.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}.*
+          path: |
+            ${{ matrix.artifact }}.*
 
   release:
     name: Create Release
@@ -90,3 +100,4 @@ jobs:
           files: |
             artifacts/**/*.tar.gz
             artifacts/**/*.zip
+            artifacts/**/*.sha256

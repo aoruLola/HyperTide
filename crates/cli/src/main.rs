@@ -67,9 +67,11 @@ enum Command {
     Completions(cmd::completions::CompletionsArgs),
     #[command(about = "Check login, connectivity, and workspace health")]
     Doctor(cmd::doctor::DoctorArgs),
+    #[command(about = "Inspect and validate HyperTide server operations")]
+    Server(cmd::server::ServerArgs),
 }
 
-#[expect(dead_code)]
+#[allow(dead_code)]
 fn parse_cli_from<I, T>(iter: I) -> std::result::Result<Cli, clap::Error>
 where
     I: IntoIterator<Item = T>,
@@ -103,6 +105,7 @@ async fn main() -> Result<()> {
         Command::Stage(args) => cmd::stage::execute(args).await,
         Command::Completions(args) => cmd::completions::execute(args),
         Command::Doctor(args) => cmd::doctor::execute(args).await,
+        Command::Server(args) => cmd::server::execute(args).await,
     }
 }
 
@@ -195,10 +198,41 @@ mod cli_tests {
     }
 
     #[test]
+    fn checkout_accepts_dry_run_flag() {
+        assert!(Cli::try_parse_from(["ht", "checkout", "--dry-run"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "ht",
+            "checkout",
+            "--repo",
+            "r",
+            "--branch",
+            "dev",
+            "--to",
+            "cs-1",
+            "--dry-run",
+        ])
+        .is_ok());
+    }
+
+    #[test]
     fn branch_switch_accepts_force_flag() {
         assert!(
             Cli::try_parse_from(["ht", "branch", "switch", "--name", "main", "--force"]).is_ok()
         );
+    }
+
+    #[test]
+    fn server_doctor_accepts_env_file_and_server_url() {
+        assert!(Cli::try_parse_from([
+            "ht",
+            "server",
+            "doctor",
+            "--env-file",
+            "deploy/server/.env.production",
+            "--server-url",
+            "https://hypertide.example.com",
+        ])
+        .is_ok());
     }
 
     #[test]

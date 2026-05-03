@@ -22,10 +22,18 @@ powershell -ExecutionPolicy Bypass -File .\deploy\server\smoke.ps1
 - `jwt-keys`
 - `hypertide` backend service
 
+## Operational Endpoints
+
+- `GET /health/live`: process liveness
+- `GET /health/ready`: database readiness
+- `GET /metrics`: Prometheus-compatible HTTP counters
+
 ## Notes
 
 - This is the preferred server deployment entrypoint going forward.
 - The backend image is built from `deploy/server/Dockerfile`.
 - JWT keys are generated into `deploy/server/keys/`.
 - Persistent asset storage remains at the repository-level `storage/` directory.
-- For production, replace the example database password, pepper, and generated JWT keys.
+- `RATE_LIMIT_REQUESTS_PER_MINUTE` defaults to `600`; set `0` only for trusted development environments.
+- Prefer `WITNESS_CONFIG_JSON` or `WITNESS_CONFIG_FILE` for witness configuration. Legacy `WITNESS_KEYS` remains supported for compatibility.
+- For production, set `APP_ENV=production`, replace the example database password, pepper, JWT keys, witness secrets, and high-risk signing secret.

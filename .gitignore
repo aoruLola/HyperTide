@@ -4,6 +4,10 @@
 /deploy/.env
 /deploy/keys/
 /deploy/server/.env
+/deploy/server/.env.production
+/deploy/server/backups/
+/deploy/server/ci-restore-target/
+/deploy/server/data/
 /deploy/server/keys/
 /deploy/cli/dist/
 /storage/

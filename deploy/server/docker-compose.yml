@@ -45,12 +45,15 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-hypertide}:${POSTGRES_PASSWORD:-hypertide}@postgres:5432/${POSTGRES_DB:-hypertide}
       DB_MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-10}
       DB_ACQUIRE_TIMEOUT_SECS: ${DB_ACQUIRE_TIMEOUT_SECS:-5}
+      APP_ENV: ${APP_ENV:-development}
       AUTH_PEPPER: ${AUTH_PEPPER:-hypertide-dev-pepper}
       JWT_PRIVATE_KEY_PATH: /keys/jwt-private.pem
       JWT_PUBLIC_KEY_PATH: /keys/jwt-public.pem
       JWT_ISSUER: ${JWT_ISSUER:-hypertide}
       ACCESS_TOKEN_TTL_SECS: ${ACCESS_TOKEN_TTL_SECS:-900}
       REFRESH_TOKEN_TTL_SECS: ${REFRESH_TOKEN_TTL_SECS:-604800}
+      RATE_LIMIT_REQUESTS_PER_MINUTE: ${RATE_LIMIT_REQUESTS_PER_MINUTE:-600}
+      WITNESS_CONFIG_JSON: ${WITNESS_CONFIG_JSON:-}
       RUST_LOG: ${RUST_LOG:-hypertide_cli=info,hypertide=info}
     ports:
       - "${APP_PORT:-3000}:3000"

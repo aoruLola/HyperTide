@@ -51,6 +51,35 @@ impl StorageManager {
         Ok(())
     }
 
+    /// Verify that required storage directories exist and accept writes.
+    pub async fn health_check(&self) -> Result<(), HyperTideError> {
+        let objects_dir = self.storage_root.join("objects");
+        let temp_dir = self.storage_root.join("temp");
+
+        for (path, label) in [(&objects_dir, "objects"), (&temp_dir, "temp")] {
+            let metadata = fs::metadata(path).await.map_err(|e| {
+                HyperTideError::Persistence(format!("Storage {label} dir is unavailable: {e}"))
+            })?;
+            if !metadata.is_dir() {
+                return Err(HyperTideError::Persistence(format!(
+                    "Storage {label} path is not a directory"
+                )));
+            }
+        }
+
+        let probe_path = temp_dir.join(".hypertide-healthcheck");
+        let mut file = fs::File::create(&probe_path).await.map_err(|e| {
+            HyperTideError::Persistence(format!("Storage temp dir is not writable: {e}"))
+        })?;
+        file.write_all(chrono::Utc::now().to_rfc3339().as_bytes())
+            .await
+            .map_err(|e| HyperTideError::Persistence(format!("Storage probe write failed: {e}")))?;
+        file.sync_all()
+            .await
+            .map_err(|e| HyperTideError::Persistence(format!("Storage probe sync failed: {e}")))?;
+        Ok(())
+    }
+
     /// Calculate BLAKE3 hash of file content
     pub fn calculate_hash(data: &[u8]) -> String {
         let mut hasher = Hasher::new();
@@ -228,6 +257,28 @@ mod tests {
             .await
             .expect("retrieve object");
         assert_eq!(object, payload);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
+    async fn health_check_requires_initialized_storage_dirs() {
+        let root = make_storage_root("health-uninitialized");
+        let manager = StorageManager::new(&root);
+
+        let error = manager
+            .health_check()
+            .await
+            .expect_err("uninitialized storage should not be ready");
+        assert!(error
+            .to_string()
+            .contains("Storage objects dir is unavailable"));
+
+        manager.init().await.expect("init storage");
+        manager
+            .health_check()
+            .await
+            .expect("initialized storage is ready");
+
         std::fs::remove_dir_all(root).ok();
     }
 

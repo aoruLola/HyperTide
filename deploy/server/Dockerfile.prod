@@ -1,0 +1,27 @@
+FROM rust:1.85.1-bookworm AS builder
+
+WORKDIR /src
+COPY . .
+RUN cargo build --release -p hypertide-server
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates wget \
+    && useradd --system --uid 10001 --gid nogroup --home-dir /app --shell /usr/sbin/nologin hypertide \
+    && mkdir -p /app/storage /app/keys /app/backups \
+    && chown -R 10001:nogroup /app \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV APP_ENV=production
+ENV STORAGE_PATH=/app/storage
+
+WORKDIR /app
+COPY --from=builder /src/target/release/hypertide /usr/local/bin/hypertide
+
+USER 10001:65534
+EXPOSE 3000
+HEALTHCHECK --interval=10s --timeout=5s --retries=12 --start-period=30s \
+    CMD wget -qO- http://127.0.0.1:3000/health/ready || exit 1
+
+ENTRYPOINT ["hypertide"]

@@ -54,7 +54,7 @@ impl From<StorageError> for HyperTideError {
 ///
 /// This trait and its implementations are not yet integrated into the server.
 /// Integration will happen in a follow-up phase.
-#[expect(dead_code)]
+#[allow(dead_code)]
 pub trait StorageBackend: Send + Sync {
     /// Store data and return its hash. If the data already exists, returns the existing hash.
     async fn store(&self, hash: &str, data: &[u8]) -> Result<(), StorageError>;
@@ -73,7 +73,7 @@ pub trait StorageBackend: Send + Sync {
 }
 
 /// Calculate BLAKE3 hash for content-addressable storage.
-#[expect(dead_code)]
+#[allow(dead_code)]
 pub fn calculate_hash(data: &[u8]) -> String {
     let mut hasher = Hasher::new();
     hasher.update(data);
@@ -89,7 +89,7 @@ pub struct LocalFsBackend {
 }
 
 impl LocalFsBackend {
-    #[expect(dead_code)]
+    #[allow(dead_code)]
     pub fn new(root: impl AsRef<Path>) -> Self {
         Self {
             root: root.as_ref().to_path_buf(),
@@ -97,13 +97,14 @@ impl LocalFsBackend {
     }
 
     /// Initialize the storage directory.
-    #[expect(dead_code)]
+    #[allow(dead_code)]
     pub async fn init(&self) -> Result<(), StorageError> {
         fs::create_dir_all(self.root.join("objects")).await?;
         fs::create_dir_all(self.root.join("temp")).await?;
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn object_path(&self, hash: &str) -> Option<PathBuf> {
         if hash.len() < 3 {
             return None;

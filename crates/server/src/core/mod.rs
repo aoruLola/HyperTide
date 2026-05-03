@@ -8,6 +8,7 @@ pub mod error;
 pub mod events;
 pub mod high_risk;
 pub mod lock;
+pub mod open_core;
 pub mod replay;
 pub mod session;
 pub mod storage;

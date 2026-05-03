@@ -1,16 +1,25 @@
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use std::collections::HashSet;
 
 use crate::core::checkpoint::CheckpointRecord;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 struct WitnessKey {
     id: String,
     secret: String,
+    #[serde(default = "default_witness_scope")]
     scope: String,
+    #[serde(default = "default_witness_environment")]
     environment: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WitnessConfig {
+    witnesses: Vec<WitnessKey>,
+    quorum: Option<usize>,
+    scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, FromRow)]
@@ -66,41 +75,22 @@ pub struct WitnessService {
 
 impl WitnessService {
     pub fn from_env(pool: PgPool) -> Self {
-        // format: "w1:secret1:scope1,w2:secret2:scope2"
-        let configured = std::env::var("WITNESS_KEYS").unwrap_or_else(|_| {
-            "witness-a:dev-secret-a,witness-b:dev-secret-b,witness-c:dev-secret-c".to_string()
-        });
+        let structured_config = load_structured_witness_config();
+        let configured = std::env::var("WITNESS_KEYS").ok();
         let default_scope =
             std::env::var("WITNESS_DEFAULT_SCOPE").unwrap_or_else(|_| "local".to_string());
         let default_environment =
             std::env::var("WITNESS_DEFAULT_ENVIRONMENT").unwrap_or_else(|_| "local".to_string());
-        let mut witnesses = configured
-            .split(',')
-            .filter_map(|item| {
-                let mut parts = item.splitn(4, ':');
-                let id = parts.next()?.trim();
-                let secret = parts.next()?.trim();
-                let scope = parts
-                    .next()
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or_else(|| default_scope.clone());
-                let environment = parts
-                    .next()
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or_else(|| default_environment.clone());
-                if id.is_empty() || secret.is_empty() {
-                    return None;
-                }
-                Some(WitnessKey {
-                    id: id.to_string(),
-                    secret: secret.to_string(),
-                    scope,
-                    environment,
-                })
-            })
-            .collect::<Vec<_>>();
+        let mut witnesses = structured_config
+            .as_ref()
+            .map(|config| normalize_structured_witnesses(config.witnesses.clone()))
+            .unwrap_or_else(|| {
+                parse_legacy_witness_keys(
+                    configured.as_deref(),
+                    &default_scope,
+                    &default_environment,
+                )
+            });
         if witnesses.is_empty() {
             witnesses = vec![
                 WitnessKey {
@@ -124,12 +114,21 @@ impl WitnessService {
             ];
         }
 
-        let quorum = std::env::var("WITNESS_QUORUM")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
+        let quorum = structured_config
+            .as_ref()
+            .and_then(|config| config.quorum)
+            .or_else(|| {
+                std::env::var("WITNESS_QUORUM")
+                    .ok()
+                    .and_then(|v| v.parse::<usize>().ok())
+            })
             .unwrap_or(2)
             .clamp(1, witnesses.len());
-        let scope = std::env::var("WITNESS_SCOPE").unwrap_or_else(|_| "single-env".to_string());
+        let scope = structured_config
+            .and_then(|config| config.scope)
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| std::env::var("WITNESS_SCOPE").ok())
+            .unwrap_or_else(|| "single-env".to_string());
 
         Self {
             pool,
@@ -299,4 +298,83 @@ impl WitnessService {
                 && self.witnesses.len() >= self.quorum,
         }
     }
+}
+
+fn default_witness_scope() -> String {
+    "local".to_string()
+}
+
+fn default_witness_environment() -> String {
+    "local".to_string()
+}
+
+fn load_structured_witness_config() -> Option<WitnessConfig> {
+    let raw = std::env::var("WITNESS_CONFIG_JSON").ok().or_else(|| {
+        std::env::var("WITNESS_CONFIG_FILE")
+            .ok()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+    })?;
+    serde_json::from_str::<WitnessConfig>(&raw)
+        .map_err(|error| {
+            tracing::warn!("Ignoring invalid structured witness config: {error}");
+            error
+        })
+        .ok()
+}
+
+fn normalize_structured_witnesses(witnesses: Vec<WitnessKey>) -> Vec<WitnessKey> {
+    witnesses
+        .into_iter()
+        .filter(|witness| !witness.id.trim().is_empty() && !witness.secret.trim().is_empty())
+        .map(|mut witness| {
+            witness.id = witness.id.trim().to_string();
+            witness.secret = witness.secret.trim().to_string();
+            witness.scope = witness.scope.trim().to_string();
+            witness.environment = witness.environment.trim().to_string();
+            if witness.scope.is_empty() {
+                witness.scope = default_witness_scope();
+            }
+            if witness.environment.is_empty() {
+                witness.environment = default_witness_environment();
+            }
+            witness
+        })
+        .collect()
+}
+
+fn parse_legacy_witness_keys(
+    configured: Option<&str>,
+    default_scope: &str,
+    default_environment: &str,
+) -> Vec<WitnessKey> {
+    let Some(configured) = configured else {
+        return Vec::new();
+    };
+    configured
+        .split(',')
+        .filter_map(|item| {
+            let mut parts = item.splitn(4, ':');
+            let id = parts.next()?.trim();
+            let secret = parts.next()?.trim();
+            let scope = parts
+                .next()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| default_scope.to_string());
+            let environment = parts
+                .next()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| default_environment.to_string());
+            if id.is_empty() || secret.is_empty() {
+                return None;
+            }
+            Some(WitnessKey {
+                id: id.to_string(),
+                secret: secret.to_string(),
+                scope,
+                environment,
+            })
+        })
+        .collect()
 }
