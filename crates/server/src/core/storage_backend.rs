@@ -52,8 +52,10 @@ impl From<StorageError> for HyperTideError {
 #[async_trait]
 /// Storage backend abstraction for content-addressable storage.
 ///
-/// This trait and its implementations are not yet integrated into the server.
-/// Integration will happen in a follow-up phase.
+/// **Status: Roadmap — not yet integrated into the server.**
+/// The server currently uses `StorageManager` directly (local FS CAS).
+/// This trait is prepared for future pluggable backends (S3, object storage, etc.)
+/// and will be wired in during a follow-up phase.
 #[allow(dead_code)]
 pub trait StorageBackend: Send + Sync {
     /// Store data and return its hash. If the data already exists, returns the existing hash.

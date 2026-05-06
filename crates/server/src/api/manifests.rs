@@ -375,6 +375,7 @@ pub async fn compose_blob(
     };
 
     let mut composed = Vec::new();
+    let mut total_size: u64 = 0;
     for chunk in manifest.chunks {
         let bytes = match state.storage_manager.retrieve(&chunk.chunk_hash).await {
             Ok(bytes) => bytes,
@@ -388,6 +389,18 @@ pub async fn compose_blob(
                 );
             }
         };
+        if bytes.len() as u64 != chunk.size {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::err(format!(
+                    "chunk size mismatch for {}: manifest declared {} but actual {}",
+                    chunk.chunk_hash,
+                    chunk.size,
+                    bytes.len()
+                ))),
+            );
+        }
+        total_size += bytes.len() as u64;
         composed.extend_from_slice(&bytes);
     }
 
@@ -412,7 +425,7 @@ pub async fn compose_blob(
         StatusCode::OK,
         Json(ApiResponse::ok(ComposeBlobResponse {
             blob_hash: stored.hash,
-            size_bytes: stored.size_bytes,
+            size_bytes: total_size,
         })),
     )
 }

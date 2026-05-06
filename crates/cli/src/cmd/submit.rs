@@ -54,11 +54,7 @@ pub(crate) async fn execute(args: SubmitArgs) -> Result<()> {
         .visibility
         .as_deref()
         .or_else(|| args.from_checkpoint.as_ref().map(|_| "draft"));
-    let kind = if args.from_checkpoint.is_some() {
-        "checkpoint"
-    } else {
-        "direct"
-    };
+    let kind = "normal";
 
     let payload = SubmitRequest {
         repo_id: &repo,
