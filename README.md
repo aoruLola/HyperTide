@@ -1,205 +1,122 @@
+<div align="center">
+
 # HyperTide
 
+**Open-source version control for large binary assets with centralized truth and audit-ready trust chains.**
+
+[![CI](https://github.com/openLYURA/HyperTide/actions/workflows/ci.yml/badge.svg)](https://github.com/openLYURA/HyperTide/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/openLYURA/HyperTide?include_prereleases&style=flat-square)](https://github.com/openLYURA/HyperTide/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
+[![Docker Compose](https://img.shields.io/badge/deploy-docker%20compose-2496ED?style=flat-square&logo=docker)](deploy/server/README.md)
+
+[Quick Start](#quick-start) ·
+[CLI](docs/cli/README.md) ·
+[Server](docs/server/README.md) ·
+[OpenAPI](docs/api/openapi.yaml) ·
+[Self Hosting](docs/operations/self-hosting.md) ·
+[Security](SECURITY.md) ·
 [中文](README_CN.md)
 
-**Centralized version control for large binary assets.**
+</div>
 
-HyperTide is purpose-built for game content, art files, build outputs, and other large binary assets that don't work well with Git. It provides server-maintained version truth, file locking, approval workflows, and full audit trails — all through a simple CLI.
+## What Is HyperTide?
 
-## Why HyperTide
+HyperTide is a self-hostable version control core for game content, art files, build outputs, and other large binary assets that do not fit well in Git. It keeps repo, branch, lock, changeset, checkpoint, and audit state on the server while the CLI manages local workspace state under `.hypertide/`.
+
+The Community Edition is open source and focused on the Server + CLI workflow. It does not include a public desktop or web UI.
+
+## Features
+
+- **Content-addressable binary storage** — CAS storage with BLAKE3 hashing, deduplication, and atomic writes.
+- **Server-side repo and branch truth** — Explicit repo initialization, server-owned branch heads, and stale submission rejection.
+- **File locking with leases** — Owner checks, renewals, forced unlock audit trails, and lock-aware submit protection.
+- **Changeset lifecycle** — Draft, approve, promote, rollback, log, sync, and checkout flows for controlled asset history.
+- **Audit and witness layer** — Hash-chain audit records, checkpoint attestations, and structured witness configuration.
+- **Agent-native checkpoints** — Sessions and checkpoints for recoverable AI-assisted asset workflows.
+- **Production-oriented self hosting** — Docker Compose deployment, health checks, metrics, rate limiting, and graceful shutdown.
+
+## Quick Start
+
+```bash
+git clone https://github.com/openLYURA/HyperTide.git
+cd HyperTide
+cargo build --release
+
+docker compose -f deploy/server/docker-compose.yml --env-file deploy/server/.env.example up -d
+
+target/release/ht login --server http://localhost:3000 --token dev-master-key
+target/release/ht init --repo my-repo
+target/release/ht doctor
+
+target/release/ht add --file Content/Props/tree.uasset
+target/release/ht status
+target/release/ht submit --message "update tree prop"
+```
+
+For a guided walkthrough, see [Getting Started](docs/getting-started.md). For production deployment, see [Self Hosting](docs/operations/self-hosting.md).
+
+## Why HyperTide?
 
 | | Git | Git LFS | Perforce | **HyperTide** |
 |---|---|---|---|---|
 | Large binary files | Poor | OK | Good | **Excellent** |
 | File locking | No | No | Yes | **Yes** |
-| Approval workflows | No | No | Limited | **Full (gate → approve → promote)** |
+| Approval workflows | No | No | Limited | **Gate, approve, promote** |
 | Audit chain | No | No | Basic | **BLAKE3 hash chain + witnesses** |
-| Agent support | No | No | No | **Native (sessions, checkpoints)** |
-| Self-hosted | Yes | Yes | Expensive | **Yes (Docker)** |
-| Open source | Yes | Yes | No | **Yes (MIT)** |
-
-## Quick Start
-
-### Prerequisites
-
-- Rust 1.85.1+
-- PostgreSQL 15+
-- Docker (optional, for container deployment)
-
-### Install
-
-```bash
-# Clone
-git clone https://github.com/openLYURA/HyperTide.git
-cd HyperTide
-
-# Build
-cargo build --release
-
-# The CLI binary is at target/release/ht
-# The server binary is at target/release/hypertide
-```
-
-### Run with Docker
-
-```bash
-docker compose -f deploy/server/docker-compose.yml --env-file deploy/server/.env.example up -d
-```
-
-### Login and start working
-
-```bash
-# Login to server
-ht login --server http://localhost:3000 --token dev-master-key
-
-# Create or select a repo for this workspace
-ht init --repo my-repo
-
-# Check health
-ht doctor
-
-# Pull latest assets
-ht sync
-ht checkout
-
-# Edit files, then stage and submit
-ht add --file Content/Props/tree.uasset
-ht status
-ht submit --message "update tree prop"
-```
-
-## CLI Commands
-
-### Core Workflow
-
-| Command | Description |
-|---|---|
-| `ht login` | Save server credentials and defaults |
-| `ht init` | Create/select a repo and initialize the local workspace |
-| `ht repo` | Create, list, inspect, or select repositories |
-| `ht sync` | Sync local metadata to server snapshot |
-| `ht checkout` | Pull server assets into workspace |
-| `ht add` | Stage a local file for the next submit |
-| `ht remove` | Stage an asset removal |
-| `ht submit` | Create a formal changeset |
-| `ht status` | Show asset status (modified/staged/locked) |
-| `ht diff` | Show hash differences |
-| `ht log` | Show changeset history (`--graph` for visual) |
-| `ht rollback` | Roll back to a previous changeset |
-
-### Staging
-
-| Command | Description |
-|---|---|
-| `ht stage list` | Show staged assets |
-| `ht stage clear` | Clear all staged assets |
-
-### Branching
-
-| Command | Description |
-|---|---|
-| `ht branch create` | Create a branch |
-| `ht branch list` | List branches |
-| `ht branch switch` | Switch default branch |
-
-### Locking
-
-| Command | Description |
-|---|---|
-| `ht lock acquire` | Lock a file for editing |
-| `ht lock release` | Release a lock |
-| `ht lock renew` | Extend lock lease |
-| `ht lock list` | List all active locks |
-| `ht lock force-release` | Admin: force release a lock |
-
-### Checkpoints (Agent Workflows)
-
-| Command | Description |
-|---|---|
-| `ht save` | Save workspace progress (no branch advance) |
-| `ht checkpoint create` | Create a recoverable workspace checkpoint |
-| `ht checkpoint restore` | Restore workspace to a checkpoint |
-| `ht checkpoint branch` | Create a branch from a checkpoint |
-| `ht checkpoint list` | List checkpoints |
-
-### Governance
-
-| Command | Description |
-|---|---|
-| `ht changeset gate` | Check changeset promotion readiness |
-| `ht changeset approve` | Approve a changeset |
-| `ht changeset promote` | Promote changeset to visible head |
-| `ht trust checkpoint` | Generate/inspect system state attestations |
-| `ht trust witness` | Witness attestation operations |
-| `ht trust audit` | Audit chain verification and export |
-| `ht trust replay` | Event replay verification |
-| `ht trust retention` | Retention policy inspection |
-
-### Utilities
-
-| Command | Description |
-|---|---|
-| `ht doctor` | Check login, connectivity, and workspace health |
-| `ht completions` | Generate shell completion scripts |
-| `ht chunk-upload` | Upload large files through chunk storage |
-
-All commands support `--json` for structured output and `--help` for detailed usage.
+| Agent support | No | No | No | **Sessions + checkpoints** |
+| Self-hosted | Yes | Yes | Expensive | **Docker Compose first** |
+| Open source core | Yes | Yes | No | **MIT** |
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    CLI["ht CLI"] --> API["HyperTide Server API"]
+    API --> PG["PostgreSQL metadata"]
+    API --> CAS["BLAKE3 CAS storage"]
+    API --> Locks["Lock manager"]
+    API --> Audit["Audit hash chain"]
+    Audit --> Witness["Witness attestations"]
+    CLI --> Local[".hypertide workspace state"]
 ```
-HyperTide
-├── crates/server    → hypertide-server (binary: hypertide)
-├── crates/cli       → hypertide-cli (binary: ht)
-├── migrations/      → PostgreSQL schema migrations
-├── deploy/          → Docker and packaging scripts
-└── docs/            → Design notes and specifications
-```
 
-The open source repository contains the server and CLI. The server provides REST APIs for all version operations. The CLI translates workspace actions into API calls and manages local state under `.hypertide/`. The server is the single source of truth — there is no local DAG or offline commits. Desktop or web UI work is outside the public Community Edition repository.
+The server is the source of truth for repo, branch, changeset, lock, audit, session, and checkpoint state. The CLI translates local workspace actions into API calls and keeps only client-side cache and staging metadata locally.
 
-## Key Design Decisions
+## Community vs Enterprise
 
-- **Content-addressable storage** — Files stored by BLAKE3 hash, automatic deduplication
-- **Server-side branch heads** — No divergent local histories, stale submissions rejected
-- **Four-stage changeset lifecycle** — draft → approve → promote → visible
-- **Audit chain** — BLAKE3 hash chain with witness attestations, fully verifiable
-- **High-risk operation signing** — HMAC-SHA256 with nonce + timestamp, anti-replay
+HyperTide Community Edition contains the open source Server and CLI, Docker Compose deployment assets, OpenAPI documentation, and the basic trust/audit/witness layer.
 
-## Deployment
-
-See [deploy/server/README.md](deploy/server/README.md) for Docker deployment and [deploy/cli/README.md](deploy/cli/README.md) for CLI packaging.
-
-```bash
-# Docker Compose
-docker compose -f deploy/server/docker-compose.yml --env-file deploy/server/.env.example up -d
-
-# Smoke test
-powershell -ExecutionPolicy Bypass -File deploy/server/smoke.ps1
-```
+HyperTide Enterprise is a separate commercial distribution built on top of the public extension points. Advanced identity, RBAC/ABAC, compliance exports, cloud or hardware-backed witness integrations, managed deployment support, SLA support, and private UI experiments are not part of this public Community Edition repository.
 
 ## Documentation
 
-- [Getting Started](docs/getting-started.md) — 5 分钟上手指南
-- [CLI Reference](docs/cli/README.md) — 所有命令的详细参数和示例
-- [Server Guide](docs/server/README.md) — 服务端配置、API Key 管理、生产部署
-- [Architecture](docs/architecture.md) — 系统架构和设计决策
-- [API Spec](docs/api/openapi.yaml) — OpenAPI 规格
-- [Docker Deployment](deploy/server/README.md) — Docker 部署指南
-- [Contributing](CONTRIBUTING.md) — 贡献指南
-- [Security](SECURITY.md) — 安全问题报告
+- [Getting Started](docs/getting-started.md) — 5-minute local walkthrough.
+- [CLI Reference](docs/cli/README.md) — Commands, flags, examples, and troubleshooting.
+- [Server Guide](docs/server/README.md) — Server configuration, API keys, and operations.
+- [Self Hosting](docs/operations/self-hosting.md) — Docker Compose production deployment.
+- [Operations Runbook](docs/operations/runbook.md) — Backup, restore, rollback, and incident response.
+- [Architecture](docs/architecture.md) — System design and data flow.
+- [OpenAPI Spec](docs/api/openapi.yaml) — REST API contract.
+- [Contributing](CONTRIBUTING.md) — Contribution workflow.
+- [Security](SECURITY.md) — Private vulnerability reporting.
+
+## Development
+
+```bash
+cargo fmt --all -- --check
+cargo check --workspace
+cargo clippy --workspace -- -D warnings
+cargo test --workspace
+```
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). In short:
-
-1. Fork and create a branch from `main`
-2. Make focused changes with tests
-3. Submit a pull request
+Contributions are welcome. Start from [CONTRIBUTING.md](CONTRIBUTING.md), keep changes focused, and include tests for behavior changes.
 
 ## Security
 
-Report security issues privately via [SECURITY.md](SECURITY.md). Do not disclose publicly.
+Report security issues privately via [SECURITY.md](SECURITY.md). Do not disclose vulnerabilities publicly before maintainers have had a chance to respond.
 
 ## License
 

@@ -1,193 +1,122 @@
+<div align="center">
+
 # HyperTide
 
+**面向大型二进制资产的开源版本控制核心：服务端真相源、可审计信任链、CLI 优先工作流。**
+
+[![CI](https://github.com/openLYURA/HyperTide/actions/workflows/ci.yml/badge.svg)](https://github.com/openLYURA/HyperTide/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/openLYURA/HyperTide?include_prereleases&style=flat-square)](https://github.com/openLYURA/HyperTide/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
+[![Docker Compose](https://img.shields.io/badge/deploy-docker%20compose-2496ED?style=flat-square&logo=docker)](deploy/server/README.md)
+
+[快速开始](#快速开始) ·
+[CLI](docs/cli/README.md) ·
+[Server](docs/server/README.md) ·
+[OpenAPI](docs/api/openapi.yaml) ·
+[自托管](docs/operations/self-hosting.md) ·
+[安全](SECURITY.md) ·
 [English](README.md)
 
-**面向大型二进制资产的中心化版本控制系统。**
+</div>
 
-HyperTide 专为游戏资源、美术文件、构建产物等不适合 Git 的大型二进制资产而设计。它提供服务端维护的版本真相、文件锁、审批工作流和完整审计链，通过简洁的 CLI 操作。
+## HyperTide 是什么？
 
-## 为什么选择 HyperTide
+HyperTide 是一个可自托管的版本控制核心，面向游戏资源、美术文件、构建产物等不适合 Git 管理的大型二进制资产。它把 repo、branch、lock、changeset、checkpoint、audit 等状态放在服务端维护，CLI 则负责本地 `.hypertide/` 工作区状态和提交流程。
 
-| | Git | Git LFS | Perforce | **HyperTide** |
-|---|---|---|---|---|
-| 大文件支持 | 差 | 一般 | 好 | **优秀** |
-| 文件锁 | 无 | 无 | 有 | **有** |
-| 审批工作流 | 无 | 无 | 有限 | **完整（gate → approve → promote）** |
-| 审计链 | 无 | 无 | 基础 | **BLAKE3 哈希链 + 见证者** |
-| Agent 支持 | 无 | 无 | 无 | **原生（session、checkpoint）** |
-| 自托管 | 是 | 是 | 昂贵 | **是（Docker）** |
-| 开源 | 是 | 是 | 否 | **是（MIT）** |
+Community Edition 是开源版本，边界聚焦在 Server + CLI。公开仓库不包含桌面或 Web UI。
+
+## 功能特性
+
+- **内容寻址二进制存储** — CAS 存储、BLAKE3 哈希、去重和原子写入。
+- **服务端 repo/branch 真相源** — 显式 repo 初始化、服务端分支头、过期提交拒绝。
+- **带租约的文件锁** — owner 校验、续租、强制解锁审计和提交保护。
+- **Changeset 生命周期** — draft、approve、promote、rollback、log、sync、checkout 组成受控资产历史。
+- **审计与见证层** — 哈希链审计记录、checkpoint attestations、结构化 witness 配置。
+- **Agent 原生 checkpoint** — session 与 checkpoint 支持可恢复的 AI 辅助资产工作流。
+- **面向生产自托管** — Docker Compose 部署、健康检查、metrics、rate limit、graceful shutdown。
 
 ## 快速开始
-
-### 环境要求
-
-- Rust 1.85.1+
-- PostgreSQL 15+
-- Docker（可选，用于容器部署）
-
-### 构建
 
 ```bash
 git clone https://github.com/openLYURA/HyperTide.git
 cd HyperTide
 cargo build --release
-```
 
-CLI 二进制：`target/release/ht`，服务端二进制：`target/release/hypertide`
-
-### Docker 部署
-
-```bash
 docker compose -f deploy/server/docker-compose.yml --env-file deploy/server/.env.example up -d
+
+target/release/ht login --server http://localhost:3000 --token dev-master-key
+target/release/ht init --repo my-repo
+target/release/ht doctor
+
+target/release/ht add --file Content/Props/tree.uasset
+target/release/ht status
+target/release/ht submit --message "update tree prop"
 ```
 
-### 开始使用
+完整上手流程见 [Getting Started](docs/getting-started.md)。生产部署见 [Self Hosting](docs/operations/self-hosting.md)。
 
-```bash
-# 登录
-ht login --server http://localhost:3000 --token dev-master-key
+## 为什么选择 HyperTide？
 
-# 为当前工作区创建或选择仓库
-ht init --repo my-repo
-
-# 健康检查
-ht doctor
-
-# 拉取最新资产
-ht sync
-ht checkout
-
-# 编辑文件后暂存并提交
-ht add --file Content/Props/tree.uasset
-ht status
-ht submit --message "update tree prop"
-```
-
-## CLI 命令
-
-### 核心工作流
-
-| 命令 | 说明 |
-|---|---|
-| `ht login` | 保存服务端凭据和默认配置 |
-| `ht init` | 创建/选择仓库并初始化本地工作区 |
-| `ht repo` | 创建、列出、查看或选择仓库 |
-| `ht sync` | 同步本地元数据到服务端快照 |
-| `ht checkout` | 拉取服务端资产到工作区 |
-| `ht add` | 暂存本地文件 |
-| `ht remove` | 暂存资产删除 |
-| `ht submit` | 创建正式 changeset |
-| `ht status` | 查看资产状态（修改/暂存/锁定） |
-| `ht diff` | 查看哈希差异 |
-| `ht log` | 查看提交历史（`--graph` 可视化） |
-| `ht rollback` | 回滚到历史版本 |
-
-### 暂存区
-
-| 命令 | 说明 |
-|---|---|
-| `ht stage list` | 查看暂存内容 |
-| `ht stage clear` | 清空暂存区 |
-
-### 分支
-
-| 命令 | 说明 |
-|---|---|
-| `ht branch create` | 创建分支 |
-| `ht branch list` | 列出分支 |
-| `ht branch switch` | 切换默认分支 |
-
-### 锁
-
-| 命令 | 说明 |
-|---|---|
-| `ht lock acquire` | 锁定文件 |
-| `ht lock release` | 释放锁 |
-| `ht lock renew` | 续期锁 |
-| `ht lock list` | 列出所有锁 |
-| `ht lock force-release` | 管理员强制释放锁 |
-
-### 检查点（Agent 工作流）
-
-| 命令 | 说明 |
-|---|---|
-| `ht save` | 保存工作进度（不推进分支） |
-| `ht checkpoint create` | 创建可恢复的工作区检查点 |
-| `ht checkpoint restore` | 恢复到检查点 |
-| `ht checkpoint branch` | 从检查点创建分支 |
-| `ht checkpoint list` | 列出检查点 |
-
-### 治理
-
-| 命令 | 说明 |
-|---|---|
-| `ht changeset gate` | 检查 changeset 晋升就绪状态 |
-| `ht changeset approve` | 审批 changeset |
-| `ht changeset promote` | 晋升 changeset 为可见版本 |
-| `ht trust checkpoint` | 生成/查看系统状态证明 |
-| `ht trust witness` | 见证者证明操作 |
-| `ht trust audit` | 审计链验证和导出 |
-| `ht trust replay` | 事件回放验证 |
-| `ht trust retention` | 保留策略查询 |
-
-### 工具
-
-| 命令 | 说明 |
-|---|---|
-| `ht doctor` | 检查登录、连通性和工作区健康 |
-| `ht completions` | 生成 Shell 补全脚本 |
-| `ht chunk-upload` | 大文件分块上传 |
-
-所有命令支持 `--json` 结构化输出和 `--help` 详细帮助。
+| | Git | Git LFS | Perforce | **HyperTide** |
+|---|---|---|---|---|
+| 大型二进制文件 | 差 | 一般 | 好 | **优秀** |
+| 文件锁 | 无 | 无 | 有 | **有** |
+| 审批工作流 | 无 | 无 | 有限 | **Gate、approve、promote** |
+| 审计链 | 无 | 无 | 基础 | **BLAKE3 哈希链 + witness** |
+| Agent 支持 | 无 | 无 | 无 | **Session + checkpoint** |
+| 自托管 | 是 | 是 | 昂贵 | **Docker Compose 优先** |
+| 开源核心 | 是 | 是 | 否 | **MIT** |
 
 ## 架构
 
+```mermaid
+flowchart LR
+    CLI["ht CLI"] --> API["HyperTide Server API"]
+    API --> PG["PostgreSQL metadata"]
+    API --> CAS["BLAKE3 CAS storage"]
+    API --> Locks["Lock manager"]
+    API --> Audit["Audit hash chain"]
+    Audit --> Witness["Witness attestations"]
+    CLI --> Local[".hypertide workspace state"]
 ```
-HyperTide
-├── crates/server    → hypertide-server (binary: hypertide)
-├── crates/cli       → hypertide-cli (binary: ht)
-├── migrations/      → PostgreSQL 数据库迁移
-├── deploy/          → Docker 和打包脚本
-└── docs/            → 设计文档和规格说明
-```
 
-开源仓库只包含 Server 和 CLI。服务端提供 REST API 处理所有版本操作。CLI 将工作区操作转换为 API 调用，本地状态保存在 `.hypertide/` 目录。服务端是唯一的版本真相源——没有本地 DAG 或离线提交。桌面或 Web UI 不在公开 Community Edition 仓库范围内。
+服务端是 repo、branch、changeset、lock、audit、session、checkpoint 状态的真相源。CLI 将本地工作区操作转换成 API 请求，本地只保存缓存、暂存区和工作区元数据。
 
-## 核心设计
+## Community 与 Enterprise 边界
 
-- **内容寻址存储** — 文件按 BLAKE3 哈希存储，自动去重
-- **服务端分支头** — 无分叉本地历史，过期提交被拒绝
-- **四阶段 changeset 生命周期** — draft → approve → promote → visible
-- **审计链** — BLAKE3 哈希链 + 见证者证明，完全可验证
-- **高风险操作签名** — HMAC-SHA256 + nonce + 时间戳，防重放
+HyperTide Community Edition 包含开源 Server、CLI、Docker Compose 部署资产、OpenAPI 文档，以及基础 trust/audit/witness 能力。
 
-## 部署
-
-详见 [deploy/server/README.md](deploy/server/README.md)（Docker 部署）和 [deploy/cli/README.md](deploy/cli/README.md)（CLI 打包）。
-
-```bash
-docker compose -f deploy/server/docker-compose.yml --env-file deploy/server/.env.example up -d
-```
+HyperTide Enterprise 是基于公开扩展点构建的独立商业发行版。高级身份集成、RBAC/ABAC、合规导出、云或硬件 witness 集成、托管部署支持、SLA 支持，以及私有 UI 实验，都不属于公开 Community Edition 仓库。
 
 ## 文档
 
-- [快速入门](docs/getting-started.md) — 5 分钟上手指南
-- [CLI 参考](docs/cli/README.md) — 所有命令的详细参数和示例
-- [服务端指南](docs/server/README.md) — 服务端配置、API Key 管理、生产部署
-- [架构概览](docs/architecture.md) — 系统架构和设计决策
-- [API 规格](docs/api/openapi.yaml) — OpenAPI 规格
-- [Docker 部署](deploy/server/README.md) — Docker 部署指南
-- [贡献指南](CONTRIBUTING.md) — 如何参与贡献
-- [安全报告](SECURITY.md) — 安全问题报告
+- [Getting Started](docs/getting-started.md) — 5 分钟本地上手。
+- [CLI Reference](docs/cli/README.md) — 命令、参数、示例和排错。
+- [Server Guide](docs/server/README.md) — 服务端配置、API Key 和运维说明。
+- [Self Hosting](docs/operations/self-hosting.md) — Docker Compose 生产部署。
+- [Operations Runbook](docs/operations/runbook.md) — 备份、恢复、回滚和故障处理。
+- [Architecture](docs/architecture.md) — 系统设计和数据流。
+- [OpenAPI Spec](docs/api/openapi.yaml) — REST API 契约。
+- [Contributing](CONTRIBUTING.md) — 贡献流程。
+- [Security](SECURITY.md) — 私有漏洞报告。
+
+## 开发
+
+```bash
+cargo fmt --all -- --check
+cargo check --workspace
+cargo clippy --workspace -- -D warnings
+cargo test --workspace
+```
 
 ## 贡献
 
-详见 [CONTRIBUTING.md](CONTRIBUTING.md)。简而言之：Fork → 创建分支 → 提交 PR。
+欢迎贡献。请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)，保持改动聚焦，并为行为变更补充测试。
 
 ## 安全
 
-安全问题请通过 [SECURITY.md](SECURITY.md) 私下报告，不要公开披露。
+请通过 [SECURITY.md](SECURITY.md) 私下报告安全问题。在维护者响应前，请不要公开披露漏洞细节。
 
 ## 许可证
 
