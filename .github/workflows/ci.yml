@@ -89,12 +89,19 @@ jobs:
       DATABASE_URL: postgres://hypertide:hypertide@localhost/hypertide
       MASTER_KEY: dev-master-key
       STORAGE_PATH: /tmp/hypertide-smoke-storage
+      JWT_PRIVATE_KEY_PATH: /tmp/hypertide-jwt/private.pem
+      JWT_PUBLIC_KEY_PATH: /tmp/hypertide-jwt/public.pem
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build server and CLI
         run: cargo build --workspace
+      - name: Generate JWT keys
+        run: |
+          mkdir -p /tmp/hypertide-jwt
+          openssl genrsa -out /tmp/hypertide-jwt/private.pem 2048
+          openssl rsa -in /tmp/hypertide-jwt/private.pem -pubout -out /tmp/hypertide-jwt/public.pem
       - name: Start server
         run: |
           ./target/debug/hypertide &
