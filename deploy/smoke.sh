@@ -2,6 +2,7 @@
 set -euo pipefail
 
 BASE_URL="${1:-http://localhost:3000}"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 pass=0
 fail=0
@@ -22,6 +23,11 @@ assert() {
 }
 
 echo "Smoke start: $BASE_URL"
+
+# --- Build CLI binary once ---
+echo "Building ht CLI..."
+HT="$PROJECT_ROOT/target/debug/ht"
+cargo build -p hypertide-cli --bin ht 2>/dev/null
 
 # --- Health ---
 assert "health/live returns OK" \
@@ -59,10 +65,8 @@ ASSET_PATH="Content/Smoke/hello.txt"
 
 echo "hello from smoke $SMOKE_ID" > "$WORKSPACE/hello.txt"
 
-cd "$WORKSPACE"
-
 assert "ht login" \
-    cargo run -p hypertide-cli --bin ht -- login \
+    "$HT" login \
         --server "$BASE_URL" \
         --token "dev-master-key" \
         --api-key-direct \
@@ -70,30 +74,30 @@ assert "ht login" \
         --branch main
 
 assert "ht branch create" \
-    cargo run -p hypertide-cli --bin ht -- branch create \
+    "$HT" branch create \
         --repo "$REPO" \
         --name "smoke-bootstrap"
 
 assert "ht add" \
-    cargo run -p hypertide-cli --bin ht -- add \
+    "$HT" add \
         --file "$WORKSPACE/hello.txt" \
         --asset-path "$ASSET_PATH"
 
 assert "ht submit" \
-    cargo run -p hypertide-cli --bin ht -- submit \
+    "$HT" submit \
         --message "smoke submit $SMOKE_ID"
 
 assert "ht sync" \
-    cargo run -p hypertide-cli --bin ht -- sync
+    "$HT" sync
 
 assert "ht checkout" \
-    cargo run -p hypertide-cli --bin ht -- checkout
+    "$HT" checkout
 
 assert "ht status" \
-    cargo run -p hypertide-cli --bin ht -- status
+    "$HT" status
 
 assert "ht diff" \
-    cargo run -p hypertide-cli --bin ht -- diff
+    "$HT" diff
 
 assert "checkout materialized asset" \
     test -f "$WORKSPACE/Content/Smoke/hello.txt"
