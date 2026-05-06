@@ -9,12 +9,16 @@ fail=0
 assert() {
     local desc="$1"
     shift
-    if "$@" >/dev/null 2>&1; then
+    local tmp
+    tmp=$(mktemp)
+    if "$@" >"$tmp" 2>&1; then
         pass=$((pass + 1))
     else
         echo "FAIL: $desc"
+        sed 's/^/  /' "$tmp" | tail -10
         fail=$((fail + 1))
     fi
+    rm -f "$tmp"
 }
 
 echo "Smoke start: $BASE_URL"
