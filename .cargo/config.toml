@@ -1,0 +1,4 @@
+# Use git CLI instead of libgit2 for fetching deps
+# Required for private enterprise repo access via gh credential helper
+[net]
+git-fetch-with-cli = true

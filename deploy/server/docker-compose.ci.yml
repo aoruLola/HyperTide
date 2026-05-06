@@ -1,0 +1,12 @@
+services:
+  hypertide:
+    image: hypertide-server:ci
+    build:
+      context: ../..
+      dockerfile: deploy/server/Dockerfile.prod
+    ports:
+      - "3000:3000"
+
+  caddy:
+    profiles:
+      - manual
