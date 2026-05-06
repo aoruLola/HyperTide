@@ -118,7 +118,7 @@ async fn require_key(
 
 fn parse_kind(value: Option<&str>) -> Result<ChangesetKind, String> {
     match value.unwrap_or("normal").to_lowercase().as_str() {
-        "normal" => Ok(ChangesetKind::Normal),
+        "normal" | "direct" | "checkpoint" => Ok(ChangesetKind::Normal),
         "rollback" => Ok(ChangesetKind::Rollback),
         _ => Err("kind must be normal|rollback".to_string()),
     }

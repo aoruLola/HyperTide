@@ -14,7 +14,7 @@ docker compose -f deploy/server/docker-compose.yml --env-file deploy/server/.env
 
 # 验证服务
 curl http://localhost:3000/health/ready
-# 应返回 {"status":"ok"}
+# 应返回 READY
 ```
 
 Docker Compose 会自动：
@@ -78,7 +78,7 @@ submit → draft → approve → promote → visible
 ### 生成 API Key
 
 ```bash
-curl -X POST http://localhost:3000/v2/auth/generate-key \
+curl -X POST http://localhost:3000/v2/auth/generate \
   -H "X-API-Key: dev-master-key" \
   -H "Content-Type: application/json" \
   -d '{"name": "developer-1", "permissions": ["upload", "lock"]}'
@@ -102,14 +102,14 @@ curl -X POST http://localhost:3000/v2/auth/generate-key \
 ### 列出 API Key
 
 ```bash
-curl http://localhost:3000/v2/auth/list-keys \
+curl http://localhost:3000/v2/auth/keys \
   -H "X-API-Key: dev-master-key"
 ```
 
 ### 吊销 API Key
 
 ```bash
-curl -X POST http://localhost:3000/v2/auth/revoke-key \
+curl -X DELETE http://localhost:3000/v2/auth/revoke \
   -H "X-API-Key: dev-master-key" \
   -H "Content-Type: application/json" \
   -d '{"key_id": "key-abc123"}'
@@ -271,7 +271,7 @@ sqlx migrate revert --source migrations
 ```bash
 # 就绪检查
 curl http://localhost:3000/health/ready
-# {"status":"ok"}
+# READY
 ```
 
 ## API 端点总览
@@ -279,12 +279,12 @@ curl http://localhost:3000/health/ready
 | 路径 | 方法 | 说明 |
 |---|---|---|
 | **认证** | | |
-| `/v2/auth/generate-key` | POST | 生成 API Key |
+| `/v2/auth/generate` | POST | 生成 API Key |
 | `/v2/auth/verify` | GET | 验证 API Key |
 | `/v2/auth/exchange-key` | POST | API Key 换 JWT |
 | `/v2/auth/refresh` | POST | 刷新 JWT |
-| `/v2/auth/list-keys` | GET | 列出 API Key |
-| `/v2/auth/revoke-key` | POST | 吊销 API Key |
+| `/v2/auth/keys` | GET | 列出 API Key |
+| `/v2/auth/revoke` | DELETE | 吊销 API Key |
 | `/v2/auth/revoke-refresh` | POST | 吊销 refresh token |
 | **仓库** | | |
 | `/v2/repos` | GET | 列出仓库 |
@@ -295,7 +295,7 @@ curl http://localhost:3000/health/ready
 | `/v2/branches` | POST | 创建分支 |
 | **版本** | | |
 | `/v2/changesets` | POST | 提交 changeset |
-| `/v2/changesets` | GET | 查看历史 |
+| `/v2/history/{repo}` | GET | 查看历史 |
 | `/v2/changesets/{id}/gate` | GET | 检查晋升就绪 |
 | `/v2/changesets/{id}/approve` | POST | 审批 |
 | `/v2/changesets/{id}/promote` | POST | 晋升 |
@@ -313,7 +313,7 @@ curl http://localhost:3000/health/ready
 | **锁** | | |
 | `/v2/locks` | GET | 列出锁 |
 | `/v2/locks/acquire` | POST | 获取锁 |
-| `/v2/locks/release` | DELETE | 释放锁 |
+| `/v2/locks/release` | POST | 释放锁 |
 | `/v2/locks/renew` | POST | 续期锁 |
 | `/v2/locks/force-release` | POST | 强制释放锁 |
 | **会话** | | |
@@ -323,14 +323,14 @@ curl http://localhost:3000/health/ready
 | `/v2/sessions/{id}/checkpoints` | GET | 列出检查点 |
 | `/v2/checkpoints/{id}/snapshot` | GET | 获取检查点快照 |
 | **治理** | | |
-| `/v2/trust/checkpoint/generate` | POST | 生成系统状态证明 |
-| `/v2/trust/checkpoint/latest` | GET | 获取最新证明 |
-| `/v2/trust/witness/{id}/attest` | POST | 见证者签名 |
-| `/v2/trust/witness/{id}/summary` | GET | 见证者摘要 |
+| `/v2/trust/checkpoints/generate` | POST | 生成系统状态证明 |
+| `/v2/trust/checkpoints/latest` | GET | 获取最新证明 |
+| `/v2/trust/checkpoints/{id}/witness/attest` | POST | 见证者签名 |
+| `/v2/trust/witness/summary` | GET | 见证者摘要 |
 | `/v2/trust/witness/topology` | GET | 见证者拓扑 |
-| `/v2/trust/audit/verify` | GET | 审计链验证 |
+| `/v2/trust/audit/verify` | POST | 审计链验证 |
 | `/v2/trust/audit/export` | GET | 审计链导出 |
-| `/v2/trust/replay/verify` | GET | 回放验证 |
+| `/v2/trust/replay/verify` | POST | 回放验证 |
 | `/v2/trust/replay/readiness` | GET | 回放就绪检查 |
 | `/v2/trust/retention/policy` | GET | 保留策略 |
 
