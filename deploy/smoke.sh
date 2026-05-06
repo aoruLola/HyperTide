@@ -10,10 +10,10 @@ assert() {
     local desc="$1"
     shift
     if "$@" >/dev/null 2>&1; then
-        ((pass++))
+        pass=$((pass + 1))
     else
         echo "FAIL: $desc"
-        ((fail++))
+        fail=$((fail + 1))
     fi
 }
 
