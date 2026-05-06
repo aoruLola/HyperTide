@@ -65,6 +65,9 @@ ASSET_PATH="Content/Smoke/hello.txt"
 
 echo "hello from smoke $SMOKE_ID" > "$WORKSPACE/hello.txt"
 
+# CLI writes relative to cwd, so operate inside the workspace
+cd "$WORKSPACE"
+
 assert "ht login" \
     "$HT" login \
         --server "$BASE_URL" \
@@ -98,6 +101,11 @@ assert "ht status" \
 
 assert "ht diff" \
     "$HT" diff
+
+# Debug: show workspace contents after checkout
+echo "--- workspace contents after checkout ---"
+find "$WORKSPACE" -type f 2>/dev/null || echo "(empty)"
+echo "---"
 
 assert "checkout materialized asset" \
     test -f "$WORKSPACE/Content/Smoke/hello.txt"
