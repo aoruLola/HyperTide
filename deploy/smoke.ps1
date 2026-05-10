@@ -46,7 +46,8 @@ Assert-Success ($verify.data.valid -eq $true) "auth/verify valid=false"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $smokeRunId = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-$workspace = Join-Path $repoRoot "tmp\deploy-smoke-$smokeRunId"
+$tmpRoot = Join-Path $repoRoot "tmp"
+$workspace = Join-Path $tmpRoot "deploy-smoke-$smokeRunId"
 New-Item -ItemType Directory -Path $workspace -Force | Out-Null
 
 $repoId = "smoke-repo-$smokeRunId"
@@ -85,7 +86,7 @@ Invoke-Cli @("checkout") $workspace
 Invoke-Cli @("status") $workspace
 Invoke-Cli @("diff") $workspace
 
-$checkedOutFile = Join-Path $workspace "Content\Smoke\hello.txt"
+$checkedOutFile = Join-Path (Join-Path (Join-Path $workspace "Content") "Smoke") "hello.txt"
 Assert-Success (Test-Path $checkedOutFile) "checkout did not materialize expected asset"
 
 Write-Host "Smoke passed." -ForegroundColor Green
