@@ -14,6 +14,8 @@ HyperTide 的定位是中心化资产版本系统：
 2. 一个可用的 API Key 或 dev token
 3. 目标服务已初始化完成，并能响应 `/v2/*` 接口
 
+第一次使用建议先读 [CLI 新手用户指南](user-guide.md)，再把本文作为完整命令参考。
+
 ```powershell
 # 查看帮助
 cargo run -p hypertide-cli --bin ht -- --help

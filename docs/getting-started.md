@@ -4,6 +4,10 @@
 
 ## 第一步：安装
 
+### 预编译 CLI
+
+如果 [GitHub Releases](https://github.com/openLYURA/HyperTide/releases) 已提供与你的平台匹配的预编译包，请优先下载并把 `ht` 加入 `PATH`。
+
 ### 从源码构建
 
 ```bash
@@ -163,6 +167,7 @@ ht completions powershell > $PROFILE
 
 ## 下一步
 
+- [CLI 新手用户指南](cli/user-guide.md) — 文件同步、检出、暂存、提交、差异和排错全链路
 - [CLI 完整参考](cli/README.md) — 所有命令的详细参数
 - [架构概览](architecture.md) — 了解 HyperTide 的设计
 - [部署指南](../deploy/server/README.md) — 生产环境部署

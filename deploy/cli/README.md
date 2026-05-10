@@ -1,6 +1,6 @@
 # HyperTide CLI Packaging
 
-This directory contains CLI-only packaging entrypoints for `ht`.
+This directory contains local CLI packaging entrypoints for `ht`. Release maintainers can use the generated archives as GitHub Release assets.
 
 ## Windows package
 
@@ -30,6 +30,7 @@ Output:
 
 ## Notes
 
-- These scripts are for internal distribution and deployment convenience.
+- Prefer the signed or checksum-published artifacts on [GitHub Releases](https://github.com/openLYURA/HyperTide/releases) for normal installation.
+- These scripts are for local packaging and release artifact preparation.
 - They build from the workspace root but package only the CLI artifact.
 - The output directory is ignored by git.

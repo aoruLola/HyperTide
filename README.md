@@ -12,6 +12,7 @@
 
 [Quick Start](#quick-start) ·
 [CLI](docs/cli/README.md) ·
+[Status](STATUS.md) ·
 [Server](docs/server/README.md) ·
 [OpenAPI](docs/api/openapi.yaml) ·
 [Self Hosting](docs/operations/self-hosting.md) ·
@@ -38,6 +39,8 @@ The Community Edition is open source and focused on the Server + CLI workflow. I
 
 ## Quick Start
 
+Download the precompiled CLI from [GitHub Releases](https://github.com/openLYURA/HyperTide/releases) first when a package is available for your platform. Source builds are the fallback path:
+
 ```bash
 git clone https://github.com/openLYURA/HyperTide.git
 cd HyperTide
@@ -54,7 +57,7 @@ target/release/ht status
 target/release/ht submit --message "update tree prop"
 ```
 
-For a guided walkthrough, see [Getting Started](docs/getting-started.md). For production deployment, see [Self Hosting](docs/operations/self-hosting.md).
+For a guided walkthrough, see [Getting Started](docs/getting-started.md). For first-time CLI file operations, see the [CLI User Guide](docs/cli/user-guide.md). For production deployment, see [Self Hosting](docs/operations/self-hosting.md).
 
 ## Why HyperTide?
 
@@ -92,8 +95,11 @@ HyperTide Enterprise is a separate commercial distribution built on top of the p
 ## Documentation
 
 - [Getting Started](docs/getting-started.md) — 5-minute local walkthrough.
+- [CLI User Guide](docs/cli/user-guide.md) — First-time file operation workflow.
 - [CLI Reference](docs/cli/README.md) — Commands, flags, examples, and troubleshooting.
 - [Server Guide](docs/server/README.md) — Server configuration, API keys, and operations.
+- [Project Status](STATUS.md) — Current preview scope and roadmap boundary.
+- [Support](SUPPORT.md) — Community support channels and issue guidance.
 - [Self Hosting](docs/operations/self-hosting.md) — Docker Compose production deployment.
 - [Operations Runbook](docs/operations/runbook.md) — Backup, restore, rollback, and incident response.
 - [Architecture](docs/architecture.md) — System design and data flow.
